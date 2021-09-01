@@ -98,7 +98,6 @@ using Interpolations
 using LinearAlgebra
 using PCHIPInterpolation
 using PeriodicTable
-using Printf
 using SpecialFunctions
 using Unitful
 using Base.Threads
@@ -109,27 +108,22 @@ function Refrac(formulaList, energy, massDensityList)
 
     if !isa(formulaList, Vector{String})
         println("Need a styring for chemical formula input argument.")
-        # @sprintf "Need a styring for chemical formula input argument."
         return
     end
     if !isa(energy, Vector) | isempty(energy)
         println("Invalid x-ray energy.")
-        # @sprintf "Invalid x-ray energy."
         return
     end
     if count(!iszero, energy .< 0.03) | count(!iszero, energy .> 30) > 0
         println("Energy is out of range 0.03KeV~30KeV.")
-        # @sprintf "Energy is out of range 0.03KeV~30KeV."
         return
     end
     if !isa(massDensityList, Vector)
         println("Invalid mass density.")
-        # @sprintf "Invalid mass density."
         return
     end
     if length(formulaList) != length(massDensityList)
         println("Input arguements do not match.")
-        # @sprintf "Input arguements do not match."
         return
     end
 
@@ -246,8 +240,10 @@ function SubRefrac(formulaStr, energy, massDensity)
     interpf1 = []
     interpf2 = []
     for iElements = 1:nElements
+        # use PCHIPInterpolation
         itp1 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f1)
         itp2 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f2)
+        # use Interpolations
         # itp1 = interpolate((f1f2Table[iElements].E,), f1f2Table[iElements].f1, Gridded(Linear()))
         # itp2 = interpolate((f1f2Table[iElements].E,), f1f2Table[iElements].f2, Gridded(Linear()))
         push!(interpf1, [itp1(E) for E in energy * 1000])
