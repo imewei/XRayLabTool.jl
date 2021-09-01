@@ -3,8 +3,21 @@ uuid = "df3fe04d-a251-48f4-b0c1-7c37c180def4"
 authors = ["Wei Chen <wchen@anl.gov> and contributors"]
 version = "0.1.0"
 
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PCHIPInterpolation = "afe20452-48d1-4729-9a8b-50fb251f06cd"
+PeriodicTable = "7b2266bf-644c-5ea3-82d8-af4bbd25a884"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+
 [compat]
-julia = "1"
+julia = "1.6"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
