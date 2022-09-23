@@ -132,7 +132,7 @@ function Refrac(formulaList, energy, massDensityList)
 
     result = Dict()
 
-    @threads for ii = 1:eachindex(formulaList)
+    @threads for ii = 1:length(formulaList)
         result[formulaList[ii]] =
             SubRefrac(formulaList[ii], energy, massDensityList[ii])
     end
@@ -219,7 +219,7 @@ function SubRefrac(formulaStr, energy, massDensity)
     for iElements = 1:nElements
         AN = findall(
             x -> x == formulaElement[iElements],
-            [elements[iAtomicnum].symbol for iAtomicnum = 1:eachindex(elements)],
+            [elements[iAtomicnum].symbol for iAtomicnum = 1:length(elements)],
         )
         push!(atomicNumber, AN[1])
         push!(atomicWeight, elements[atomicNumber[iElements]].atomic_mass)
