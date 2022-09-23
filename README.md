@@ -89,4 +89,4 @@ For more information about X-ray interactions with matter, go to
 
 Atomic scattering factor table is taken from the above two websites.
 
-**This is translated from the MATLAB script written by Zhang Jiang at the Advanced Photon Source
+**This is translated from the MATLAB script written by Zhang Jiang at the Advanced Photon Source**
