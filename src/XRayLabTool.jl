@@ -133,7 +133,6 @@ function Refrac(formulaList, energy, massDensityList)
     result = Dict()
 
     for (ii, formulaListItem) in enumerate(formulaList)
-        println(ii)
         result[formulaList[ii]] =
             SubRefrac(formulaList[ii], energy, massDensityList[ii])
     end
