@@ -84,13 +84,8 @@ Example 2: >>result=SubRefrac("SiO2",Vector(8:0.5:10),2.33)
                         ⋮                     => ⋮  
 
 For more information about X-ray interactions with matter, go to  
-<<<<<<< HEAD
-   <http://www.cxro.lbl.gov>  
-   <http://www.nist.gov/>
-=======
-            <http://www.cxro.lbl.gov>  
-            <http://www.nist.gov/>
->>>>>>> 72ea31a19692cd9651bdd3088ea7b49ebc072979
+        <http://www.cxro.lbl.gov>  
+        <http://www.nist.gov/>
 Atomic scattering factor table is taken from the above two websites.
 
 **This is translated from the MATLAB script written by Zhang Jiang at the Advanced Photon Source**
