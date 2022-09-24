@@ -191,7 +191,7 @@ function SubRefrac(formulaStr, energy, massDensity)
         end
     end
 
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         nAtoms[iElements] = parse(Float64, nAtoms[iElements])
         if abs.(nAtoms[iElements]) .- 0.0 < eps()
             nAtoms[iElements] = 1.0
@@ -200,7 +200,7 @@ function SubRefrac(formulaStr, energy, massDensity)
 
     # read f1 and f2 from tables
     f1f2Table = []
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         fname = join([lowercase(formulaElement[iElements]), ".nff"])
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
         # println(file)
@@ -216,7 +216,7 @@ function SubRefrac(formulaStr, energy, massDensity)
     # determine the atomic number and atomic weight
     atomicNumber = []
     atomicWeight = []
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         AN = findall(
             x -> x == formulaElement[iElements],
             [elements[iAtomicnum].symbol for (iAtomicnum, elementsItem) in enumerate(elements)],
@@ -228,7 +228,7 @@ function SubRefrac(formulaStr, energy, massDensity)
     # determine molecular weight and number of electrons
     molecularWeight = 0
     numberOfElectrons = 0
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         molecularWeight =
             molecularWeight +
             nAtoms[iElements] * ustrip(atomicWeight[iElements])
@@ -239,7 +239,7 @@ function SubRefrac(formulaStr, energy, massDensity)
     # interpolate to get f1 and f2 for given energies
     interpf1 = []
     interpf2 = []
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         # use PCHIPInterpolation
         itp1 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f1)
         itp2 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f2)
@@ -259,7 +259,7 @@ function SubRefrac(formulaStr, energy, massDensity)
     ElectronDensity =
         1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons /
         1e30
-    for iElements = 1:nElements
+    for iElements in 1:nElements
         Dispersion =
             Dispersion +
             wavelength .^ 2 / (2 * pi) *
