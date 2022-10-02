@@ -100,7 +100,6 @@ using PCHIPInterpolation
 using PeriodicTable
 using SpecialFunctions
 using Unitful
-using Base.Threads
 
 export Refrac, SubRefrac
 
