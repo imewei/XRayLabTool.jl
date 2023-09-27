@@ -3,7 +3,7 @@ module XRayLabTool
 using CSV
 using DataFrames
 using PCHIPInterpolation
-using Mendeleev: elements
+using PeriodicTable: elements
 using Unitful
 
 export Refrac, SubRefrac, XRayResult
