@@ -103,189 +103,101 @@ using Unitful
 
 export Refrac, SubRefrac
 
-function Refrac(formulaList, energy, massDensityList)
+const thompson = 2.8179403227e-15 # m
+const speedoflight = 299792458.0 # m/sec
+const plank = 6.626068e-34 # m²kg/sec
+const elementcharge = 1.60217646e-19 # Coulombs
+const avogadro = 6.02214199e23 # mole⁻¹
 
-    if !isa(formulaList, Vector{String})
-        println("Need a styring for chemical formula input argument.")
-        return
-    end
-    if !isa(energy, Vector) | isempty(energy)
-        println("Invalid x-ray energy.")
-        return
-    end
-    if count(!iszero, energy .< 0.03) | count(!iszero, energy .> 30) > 0
+function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensityList::Vector{Float64})
+    # Input validation
+    if any(iszero, energy .< 0.03) || any(iszero, energy .> 30)
         println("Energy is out of range 0.03KeV~30KeV.")
         return
     end
-    if !isa(massDensityList, Vector)
-        println("Invalid mass density.")
-        return
-    end
     if length(formulaList) != length(massDensityList)
-        println("Input arguements do not match.")
+        println("Input arguments do not match.")
         return
     end
 
-    # --- sort energy list and
-    energy = sort!(energy)  # sort energy from min to max
+    energy = sort(energy)  # sort energy from min to max
 
-    result = Dict()
+    result = Dict{String,Dict}()
 
-    for ii in eachindex(formulaList)
-        result[formulaList[ii]] =
-            SubRefrac(formulaList[ii], energy, massDensityList[ii])
+    for formula in formulaList
+        result[formula] = SubRefrac(formula, energy, massDensityList[findfirst(x -> x == formula, formulaList)])
     end
     return result
 end
 
 
-function SubRefrac(formulaStr, energy, massDensity)
-    # Some physical constants
-    thompson = 2.8179403227e-15 # m
-    speedoflight = 299792458 # m/sec
-    plank = 6.626068e-34 # m²kg/sec
-    elementcharge = 1.60217646e-19 # Coulombs
-    avogadro = 6.02214199e23 # mole⁻¹
-
+function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Float64)
     # convert energy to wavelength
-    if !isa(energy, Vector)
-        println("Invalid x-ray energy.")
-    end
     wavelength = (speedoflight * plank / elementcharge) ./ (energy * 1000.0)
 
-    # determine elements and number of atoms in the formula
-    nElements = 0
-    formulaElement = []
-    nAtoms = []
+    # Split formulaStr into elements and atom counts
+    elements_and_counts = matchall(r"([A-Z][a-z]*)(\d*\.?\d*)", formulaStr)
+    nElements = length(elements_and_counts)
 
-    formulaChar = split(formulaStr, "")
+    formulaElement = Vector{String}(undef, nElements)
+    nAtoms = Vector{Float64}(undef, nElements)
 
-    for iFormula in eachindex(formulaStr)
-        if count(!iszero, formulaChar[iFormula] <= "Z") &
-           count(!iszero, formulaChar[iFormula] >= "A") > 0
-            nElements = nElements + 1
-            push!(formulaElement, formulaChar[iFormula])
-            push!(nAtoms, "0")
-        elseif count(!iszero, formulaChar[iFormula] <= "z") &
-               count(!iszero, formulaChar[iFormula] >= "a") &
-               (
-                   (
-                       count(!iszero, string(formulaChar[iFormula-1]) <= "Z") &
-                       count(!iszero, string(formulaChar[iFormula-1]) >= "A")
-                   ) | (
-                       count(!iszero, string(formulaChar[iFormula-1]) <= "z") &
-                       count(!iszero, string(formulaChar[iFormula-1]) >= "a")
-                   )
-               ) > 0
-            formulaElement[nElements] =
-                join([formulaElement[nElements], formulaChar[iFormula]])
-        elseif (
-            count(!iszero, formulaChar[iFormula] <= "9") &
-            count(!iszero, formulaChar[iFormula] >= "0")
-        ) | count(!iszero, formulaChar[iFormula] == ".") > 0
-            nAtoms[nElements] = join([nAtoms[nElements], formulaChar[iFormula]])
-        else
-            println("Invalid chemical formula.")
-            return
-        end
+    for (i, (element, count)) in enumerate(elements_and_counts)
+        formulaElement[i] = element
+        nAtoms[i] = isempty(count) ? 1.0 : parse(Float64, count)
     end
 
-    for iElements in 1:nElements
-        nAtoms[iElements] = parse(Float64, nAtoms[iElements])
-        if abs.(nAtoms[iElements]) .- 0.0 < eps()
-            nAtoms[iElements] = 1.0
-        end
-    end
-
-    # read f1 and f2 from tables
+    # Load f1 and f2 from tables
     f1f2Table = []
-    for iElements in 1:nElements
-        fname = join([lowercase(formulaElement[iElements]), ".nff"])
+
+    for element in formulaElement
+        fname = lowercase(element) * ".nff"
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
-        # println(file)
+
         try
             table = CSV.File(file) |> DataFrame
             push!(f1f2Table, table)
         catch
-            prtstr = formulaElement[iElements]
-            println("Element $prtstr is NOT in the table list.")
+            println("Element $element is NOT in the table list.")
         end
     end
 
-    # determine the atomic number and atomic weight
-    atomicNumber = []
-    atomicWeight = []
-    for iElements in 1:nElements
-        AN = findall(
-            x -> x == formulaElement[iElements],
-            [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],
-        )
-        push!(atomicNumber, AN[1])
-        push!(atomicWeight, elements[atomicNumber[iElements]].atomic_mass)
-    end
+    # Calculate atomic number and atomic weight
+    atomicNumber = [findfirst(x -> x.symbol == element, elements).atomic_number for element in formulaElement]
+    atomicWeight = [elements[atomicNum].atomic_mass for atomicNum in atomicNumber]
 
-    # determine molecular weight and number of electrons
-    molecularWeight = 0
-    numberOfElectrons = 0
-    for iElements in 1:nElements
-        molecularWeight =
-            molecularWeight +
-            nAtoms[iElements] * ustrip(atomicWeight[iElements])
-        numberOfElectrons =
-            numberOfElectrons + atomicNumber[iElements] * nAtoms[iElements]
-    end
+    # Calculate molecular weight and number of electrons
+    molecularWeight = sum(nAtoms .* atomicWeight)
+    numberOfElectrons = sum(atomicNumber .* nAtoms)
 
-    # interpolate to get f1 and f2 for given energies
-    interpf1 = []
-    interpf2 = []
-    for iElements in 1:nElements
-        # use PCHIPInterpolation
-        itp1 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f1)
-        itp2 = Interpolator(f1f2Table[iElements].E, f1f2Table[iElements].f2)
-        # use Interpolations
-        # itp1 = interpolate((f1f2Table[iElements].E,), f1f2Table[iElements].f1, Gridded(Linear()))
-        # itp2 = interpolate((f1f2Table[iElements].E,), f1f2Table[iElements].f2, Gridded(Linear()))
-        push!(interpf1, [itp1(E) for E in energy * 1000])
-        push!(interpf2, [itp2(E) for E in energy * 1000])
-    end
+    # Interpolate to get f1 and f2 for given energies
+    interpf1 = [Interpolation(f1f2Table[i].E, f1f2Table[i].f1, PCHIP()) for i in 1:nElements]
+    interpf2 = [Interpolation(f1f2Table[i].E, f1f2Table[i].f2, PCHIP()) for i in 1:nElements]
 
-    # calculate dispersion, absorption, critical angle and attenuation length
+    # Calculate Dispersion, Absorption, f1, f2, CriticalAngle, AttLength, reSLD, imSLD
     Dispersion = zeros(length(energy))
     Absorption = zeros(length(energy))
     f1 = zeros(length(energy))
     f2 = zeros(length(energy))
-    CriticalAngle = zeros(length(energy))
-    ElectronDensity =
-        1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons /
-        1e30
-    for iElements in 1:nElements
-        Dispersion =
-            Dispersion +
-            wavelength .^ 2 / (2 * pi) *
-            thompson *
-            avogadro *
-            massDensity *
-            1e6 / molecularWeight * nAtoms[iElements] .* interpf1[iElements]
-        Absorption =
-            Absorption +
-            wavelength .^ 2 / (2 * pi) *
-            thompson *
-            avogadro *
-            massDensity *
-            1e6 / molecularWeight * nAtoms[iElements] .* interpf2[iElements]
-        f1 = f1 + nAtoms[iElements] .* interpf1[iElements]
-        f2 = f2 + nAtoms[iElements] .* interpf2[iElements]
+
+    for i in 1:nElements
+        Dispersion .+= wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 / molecularWeight * nAtoms[i] .* interpf1[i](energy * 1000)
+        Absorption .+= wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 / molecularWeight * nAtoms[i] .* interpf2[i](energy * 1000)
+        f1 .+= nAtoms[i] .* interpf1[i](energy * 1000)
+        f2 .+= nAtoms[i] .* interpf2[i](energy * 1000)
     end
-    CriticalAngle = sqrt.((2 * Dispersion)) * 180 / pi
-    AttLength = wavelength ./ Absorption / (4 * pi) * 1e2
-    reSLD = Dispersion * 2 * pi ./ wavelength .^ 2 / 1e20
-    imSLD = Absorption * 2 * pi ./ wavelength .^ 2 / 1e20
+
+    CriticalAngle = sqrt.(2 * Dispersion) * 180 / π
+    AttLength = wavelength ./ Absorption / (4 * π) * 1e2
+    reSLD = Dispersion * 2 * π ./ wavelength .^ 2 / 1e20
+    imSLD = Absorption * 2 * π ./ wavelength .^ 2 / 1e20
+
     Xresult = Dict(
         "Formula" => formulaStr,
         "MW" => molecularWeight,
         "Number Of Electrons" => numberOfElectrons,
         "Density" => massDensity,
-        "Electron Density" => ElectronDensity,
+        "Electron Density" => 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30,
         "Energy" => energy,
         "Wavelength" => wavelength * 1e10,
         "Dispersion" => Dispersion,
