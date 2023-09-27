@@ -121,7 +121,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     for iElements in 1:nElements
         fname = join([lowercase(formulaElement[iElements]), ".nff"])
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
-
+        println(file)
         try
             table = CSV.File(file) |> DataFrame
             push!(f1f2Table, table)
