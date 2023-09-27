@@ -5,6 +5,7 @@ using DataFrames
 using PCHIPInterpolation
 using PeriodicTable: elements
 using Unitful
+import Base.Threads.@threads
 
 export Refrac, SubRefrac, XRayResult
 
@@ -75,8 +76,18 @@ function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensit
 
     results = Dict{String,XRayResult}()
 
-    for (formula, massDensity) in zip(formulaList, massDensityList)
+#    for (formula, massDensity) in zip(formulaList, massDensityList)
+#        results[formula] = SubRefrac(formula, energy, massDensity)
+#    end
+
+    # Define a threaded function to process each chemical formula
+    function process_formula(formula, massDensity)
         results[formula] = SubRefrac(formula, energy, massDensity)
+    end
+
+    # Use threads to process chemical formulas concurrently
+    @threads for i in 1:length(formulaList)
+        process_formula(formulaList[i], massDensityList[i])
     end
 
     return results
