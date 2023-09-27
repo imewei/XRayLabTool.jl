@@ -1,10 +1,9 @@
 module XRayLabTool
+
 using CSV
 using DataFrames
-# using Interpolations
-using LinearAlgebra
 using PCHIPInterpolation
-using PeriodicTable
+using Mendeleev: elements
 using Unitful
 
 export Refrac, SubRefrac, XRayResult
@@ -45,12 +44,8 @@ end
 
 # Helper function to interpolate atomic scattering factors
 function interpolate_f(E, f1, f2)
-    # use PCHIPInterpolation
     itp1 = Interpolator(E, f1)
     itp2 = Interpolator(E, f2)
-    # use Interpolations
-    # itp1 = interpolate((E,), f1, Gridded(Linear()))
-    # itp2 = interpolate((E,), f2, Gridded(Linear()))
     return itp1, itp2
 end
 
@@ -97,17 +92,17 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     molecularWeight = 0.0
     numberOfElectrons = 0.0
 
-    # determine the atomic number and atomic weight
+    # Determine the atomic number and atomic weight
     for iElements in 1:nElements
         AN = findall(x -> x == formulaElement[iElements], [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],)
         push!(atomicNumber, AN[1])
         push!(atomicWeight, elements[atomicNumber[iElements]].atomic_mass)
     end
 
-    # determine molecular weight and number of electrons
+    # Determine molecular weight and number of electrons
     for iElements in 1:nElements
-        molecularWeight = molecularWeight + element_counts[iElements] * ustrip(atomicWeight[iElements])
-        numberOfElectrons = numberOfElectrons + atomicNumber[iElements] * element_counts[iElements]
+        molecularWeight += element_counts[iElements] * ustrip(atomicWeight[iElements])
+        numberOfElectrons += atomicNumber[iElements] * element_counts[iElements]
     end
 
     # Convert energy to wavelength
@@ -122,7 +117,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     ElectronDensity = 0.0
     f1f2Table = []
 
-    # read f1 and f2 from tables
+    # Read f1 and f2 from tables
     for iElements in 1:nElements
         fname = join([lowercase(formulaElement[iElements]), ".nff"])
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
@@ -136,7 +131,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
         end
     end
 
-    # interpolate to get f1 and f2 for given energies
+    # Interpolate to get f1 and f2 for given energies
     interpf1 = []
     interpf2 = []
     for iElements in 1:nElements
@@ -158,7 +153,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     ElectronDensity += 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30
 
     CriticalAngle = sqrt.(2 * Dispersion) * 180 / π
-    AttLength = wavelength ./ Absorption / (4 * π) * 1e2
+    Attenuation_Length = wavelength ./ Absorption / (4 * π) * 1e2
     reSLD = Dispersion * 2 * π ./ wavelength .^ 2 / 1e20
     imSLD = Absorption * 2 * π ./ wavelength .^ 2 / 1e20
 
