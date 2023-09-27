@@ -136,18 +136,18 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     interpf2 = []
     for iElements in 1:nElements
         itp1, itp2 = interpolate_f(f1f2Table[iElements].E, f1f2Table[iElements].f1, f1f2Table[iElements].f2)
-        interpf1 = [itp1(E) for E in energy * 1000]
-        interpf2 = [itp2(E) for E in energy * 1000]
+        push!(interpf1, [itp1(E) for E in energy * 1000])
+        push!(interpf2, [itp2(E) for E in energy * 1000])
     end
 
     # Calculate contributions to dispersion and absorption
     for iElements in 1:nElements
-        Dispersion += wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
-                      1e6 / molecularWeight * element_counts[iElements] .* interpf1
-        Absorption += wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
-                      1e6 / molecularWeight * element_counts[iElements] .* interpf2
-        f1 += element_counts[iElements] .* interpf1
-        f2 += element_counts[iElements] .* interpf2
+        Dispersion = Dispersion .+ wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
+                      1e6 / molecularWeight * element_counts[iElements] .* interpf1[iElements]
+        Absorption = Absorption .+ wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
+                      1e6 / molecularWeight * element_counts[iElements] .* interpf2[iElements]
+        f1 = f1 .+  element_counts[iElements] .* interpf1[iElements]
+        f2 = f2 .+  element_counts[iElements] .* interpf2[iElements]
     end
 
     ElectronDensity += 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30
