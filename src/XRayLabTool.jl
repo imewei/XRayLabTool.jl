@@ -1,214 +1,173 @@
 module XRayLabTool
-#=
-XRayLabTool  Material property when interacted with x-rays.
-
-Usage: result = Refrac([Chemical Formulas],[Energy],[MassDensity])
-       result = SubRefrac(Chemical Formula, [Energy], MassDensity)
-
-Input:
-    1) Chemical formula. Can be either a vector (using Refrac for multiple formulas) or a single string (using SubRefrac for a single formula). The formula is case sensitive (e.g. CO for Carbon Monoxide vs Co for Cobalt);
-    2) Energy (0.03KeV~30KeV). Have to be a vector, even one 1-element.
-    3) List of mass densities (g/cm^3). Can be either a vector of numbers (using Refrac for multiple formulas) or a single number (using SubRefrac for a single formula).
-
-Output:
-    Can be an array of dictionaries or a single dictionary (if input is single string and using SubRefrac) with the following elements:
-    1) Chemical formula;
-    2) Molecular weight;
-    3) Number of electrons per molecule;
-    4) Mass density (g/cm^3);
-    5) Electron density (1/A^3);
-    6) Real part of the atomic scattering factor (f1)
-    7) Imaginary part of the atomic scattering factor (f2);
-    8) X-ray energy (KeV);
-    9) Corresponding X-ray wavelength (A);
-    10) Dispersion;
-    11) Absorption;
-    12) Critical angle (degree);
-    13) Attenuation length (cm);
-    14) Real part of scattering length density (SLD) (A^-2);
-    15) Imaginary part of SLD (A^-2).
-
-Example 1: >> result=Refrac(["H2O","Si3N4"],[8.04778],[1,3.44])
-           Output: a Dict array
-               result["Si3N4"] =
-               Dict{String, Any}(
-                    "Critical Angle" => [0.2707377852086883],
-                    "reSLD" => [2.955439361638965e-5],
-                    "MW" => 140.283,
-                    "Electron Density" => 1.0337188334951493,
-                    "Wavelength" => [1.5406009069367983],
-                    "f2" => [1.0482169679625088],
-                    "Formula" => "Si3N4",
-                    "Number Of Electrons" => 70.0,
-                    "f1" => [71.0208511434114],
-                    "Attenuation Length" => [0.0074403349864984964],
-                    "Energy" => [8.04778],
-                    "Dispersion" => [1.116406825816022e-5],
-                    "imSLD" => [4.362017121420607e-7],
-                    "Density" => 3.44,
-                    "Absorption" => [1.6477366282283455e-7])
-                result["H2O"] =
-                Dict{String, Any}(
-                    "Critical Angle" => [0.1532479196629315],
-                    "reSLD" => [9.469204261542127e-6],
-                    "MW" => 18.015,
-                    "Electron Density" => 0.3342848731612545,
-                    "Wavelength" => [1.5406009069367983],
-                    "f2" => [0.033709251629429504],
-                    "Formula" => "H2O",
-                    "Number Of Electrons" => 10.0,
-                    "f1" => [10.052289064465802],
-                    "Attenuation Length" => [0.10220737349289194],
-                    "Energy" => [8.04778],
-                    "Dispersion" => [3.576958610569931e-6],
-                    "imSLD" => [3.175394053391685e-8],
-                    "Density" => 1.0,
-                    "Absorption" => [1.1994939371370336e-8])
-
-Example 2: >>result=SubRefrac("SiO2",Vector(8:0.5:10),2.33)
-          Output: Dict
-           result =
-           Dict{String, Any} with 15 entries:
-              "Critical Angle"      => [0.224095, 0.210836, 0.199074, 0.188608, 0.179106]
-              "reSLD"               => [2.00086e-5, 1.9994e-5, 1.99843e-5, 1.99867e-5, 1.99707e-5]
-              "MW"                  => 60.083
-              "Electron Density"    => 0.70061
-              "Wavelength"          => [1.5498, 1.45864, 1.3776, 1.3051, 1.23984]
-              "f2"                  => [0.396933, 0.352482, 0.314986, 0.283079, 0.255704]
-              "Formula"             => "SiO2"
-              "Number Of Electrons" => 30.0
-              "f1"                  => [30.4039, 30.3817, 30.367, 30.3706, 30.3463]
-              "Attenuation Length"  => [0.0123506, 0.0147774, 0.0175093, 0.0205652, 0.0239651]
-              "Energy"              => [8.0, 8.5, 9.0, 9.5, 10.0]
-              ⋮                     => ⋮
-
-For more information about X-ray interactions with matter, go to
-   http://www.cxro.lbl.gov
-   http://www.nist.gov/
-
-Atomic scattering factor table is taken from the above two websites.
-
-This is translated from Zhang Jiang's MATLAB script
-=#
-
-using BenchmarkTools
 using CSV
 using DataFrames
-using Interpolations
+# using Interpolations
 using LinearAlgebra
 using PCHIPInterpolation
 using PeriodicTable
-using SpecialFunctions
 using Unitful
 
-export Refrac, SubRefrac
+export Refrac, SubRefrac, XRayResult
 
+# Define a custom struct to store X-ray results
+struct XRayResult
+    Formula::String
+    MW::Float64
+    Number_Of_Electrons::Float64
+    Density::Float64
+    Electron_Density::Float64
+    Energy::Vector{Float64}
+    Wavelength::Vector{Float64}
+    Dispersion::Vector{Float64}
+    Absorption::Vector{Float64}
+    f1::Vector{Float64}
+    f2::Vector{Float64}
+    Critical_Angle::Vector{Float64}
+    Attenuation_Length::Vector{Float64}
+    reSLD::Vector{Float64}
+    imSLD::Vector{Float64}
+end
+
+# Define constants as global variables
 const thompson = 2.8179403227e-15 # m
 const speedoflight = 299792458.0 # m/sec
 const plank = 6.626068e-34 # m²kg/sec
 const elementcharge = 1.60217646e-19 # Coulombs
 const avogadro = 6.02214199e23 # mole⁻¹
 
-function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensityList::Vector{Float64})
-    # Input validation
-    if any(iszero, energy .< 0.03) || any(iszero, energy .> 30)
-        println("Energy is out of range 0.03KeV~30KeV.")
-        return
-    end
-    if length(formulaList) != length(massDensityList)
-        println("Input arguments do not match.")
-        return
-    end
-
-    energy = sort(energy)  # sort energy from min to max
-
-    result = Dict{String,Dict}()
-
-    for formula in formulaList
-        result[formula] = SubRefrac(formula, energy, massDensityList[findfirst(x -> x == formula, formulaList)])
-    end
-    return result
+# Helper function to parse a chemical formula
+function parse_formula(formulaStr::String)
+    elements = eachmatch(r"([A-Z][a-z]*)(\d*\.\d*|\d*)", formulaStr)
+    element_symbols = [elem[1] for elem in elements]
+    element_counts = parse.(Float64, [elem[2] == "" ? "1.0" : elem[2] for elem in elements])
+    return element_symbols, element_counts
 end
 
+# Helper function to interpolate atomic scattering factors
+function interpolate_f(E, f1, f2)
+    # use PCHIPInterpolation
+    itp1 = Interpolator(E, f1)
+    itp2 = Interpolator(E, f2)
+    # use Interpolations
+    # itp1 = interpolate((E,), f1, Gridded(Linear()))
+    # itp2 = interpolate((E,), f2, Gridded(Linear()))
+    return itp1, itp2
+end
 
-function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Float64)
-    # convert energy to wavelength
-    wavelength = (speedoflight * plank / elementcharge) ./ (energy * 1000.0)
-
-    # Split formulaStr into elements and atom counts
-    elements_and_counts = matchall(r"([A-Z][a-z]*)(\d*\.?\d*)", formulaStr)
-    nElements = length(elements_and_counts)
-
-    formulaElement = Vector{String}(undef, nElements)
-    nAtoms = Vector{Float64}(undef, nElements)
-
-    for (i, (element, count)) in enumerate(elements_and_counts)
-        formulaElement[i] = element
-        nAtoms[i] = isempty(count) ? 1.0 : parse(Float64, count)
+# Main function to calculate X-ray properties
+function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensityList::Vector{Float64})
+    if any(!isa(arg, Vector) for arg in [formulaList, energy, massDensityList])
+        println("Invalid input: Arguments must be vectors.")
+        return nothing
     end
 
-    # Load f1 and f2 from tables
+    if any(isempty(arg) for arg in [formulaList, energy])
+        println("Invalid input: Formula list and energy vector must not be empty.")
+        return nothing
+    end
+
+    if any(energy .< 0.03) || any(energy .> 30)
+        println("Energy is out of range 0.03KeV ~ 30KeV.")
+        return nothing
+    end
+
+    if length(formulaList) != length(massDensityList)
+        println("Input arguments do not match.")
+        return nothing
+    end
+
+    energy = sort(energy)  # Sort energy from min to max
+
+    results = Dict{String,XRayResult}()
+
+    for (formula, massDensity) in zip(formulaList, massDensityList)
+        results[formula] = SubRefrac(formula, energy, massDensity)
+    end
+
+    return results
+end
+
+# Subfunction to calculate X-ray properties for a single chemical formula
+function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Float64)
+    formulaElement, element_counts = parse_formula(formulaStr)
+
+    nElements = length(formulaElement)
+    atomicNumber = Vector{Int}(undef, nElements)
+    atomicWeight = Vector{Float64}(undef, nElements)
+    molecularWeight = 0.0
+    numberOfElectrons = 0.0
+
+    # determine the atomic number and atomic weight
+    for iElements in 1:nElements
+        AN = findall(x -> x == formulaElement[iElements], [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],)
+        push!(atomicNumber, AN[1])
+        push!(atomicWeight, elements[atomicNumber[iElements]].atomic_mass)
+    end
+
+    # determine molecular weight and number of electrons
+    for iElements in 1:nElements
+        molecularWeight = molecularWeight + element_counts[iElements] * ustrip(atomicWeight[iElements])
+        numberOfElectrons = numberOfElectrons + atomicNumber[iElements] * element_counts[iElements]
+    end
+
+    # Convert energy to wavelength
+    wavelength = (speedoflight * plank / elementcharge) ./ (energy * 1000.0)
+
+    # Initialize arrays
+    Dispersion = zeros(length(energy))
+    Absorption = zeros(length(energy))
+    f1 = zeros(length(energy))
+    f2 = zeros(length(energy))
+    CriticalAngle = zeros(length(energy))
+    ElectronDensity = 0.0
     f1f2Table = []
 
-    for element in formulaElement
-        fname = lowercase(element) * ".nff"
+    # read f1 and f2 from tables
+    for iElements in 1:nElements
+        fname = join([lowercase(formulaElement[iElements]), ".nff"])
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
 
         try
             table = CSV.File(file) |> DataFrame
             push!(f1f2Table, table)
         catch
-            println("Element $element is NOT in the table list.")
+            prtstr = formulaElement[iElements]
+            println("Element $prtstr is NOT in the table list.")
         end
     end
 
-    # Calculate atomic number and atomic weight
-    atomicNumber = [findfirst(x -> x.symbol == element, elements).atomic_number for element in formulaElement]
-    atomicWeight = [elements[atomicNum].atomic_mass for atomicNum in atomicNumber]
-
-    # Calculate molecular weight and number of electrons
-    molecularWeight = sum(nAtoms .* atomicWeight)
-    numberOfElectrons = sum(atomicNumber .* nAtoms)
-
-    # Interpolate to get f1 and f2 for given energies
-    interpf1 = [Interpolation(f1f2Table[i].E, f1f2Table[i].f1, PCHIP()) for i in 1:nElements]
-    interpf2 = [Interpolation(f1f2Table[i].E, f1f2Table[i].f2, PCHIP()) for i in 1:nElements]
-
-    # Calculate Dispersion, Absorption, f1, f2, CriticalAngle, AttLength, reSLD, imSLD
-    Dispersion = zeros(length(energy))
-    Absorption = zeros(length(energy))
-    f1 = zeros(length(energy))
-    f2 = zeros(length(energy))
-
-    for i in 1:nElements
-        Dispersion .+= wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 / molecularWeight * nAtoms[i] .* interpf1[i](energy * 1000)
-        Absorption .+= wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 / molecularWeight * nAtoms[i] .* interpf2[i](energy * 1000)
-        f1 .+= nAtoms[i] .* interpf1[i](energy * 1000)
-        f2 .+= nAtoms[i] .* interpf2[i](energy * 1000)
+    # interpolate to get f1 and f2 for given energies
+    interpf1 = []
+    interpf2 = []
+    for iElements in 1:nElements
+        itp1, itp2 = interpolate_f(f1f2Table[iElements].E, f1f2Table[iElements].f1, f1f2Table[iElements].f2)
+        interpf1 = [itp1(E) for E in energy * 1000]
+        interpf2 = [itp2(E) for E in energy * 1000]
     end
+
+    # Calculate contributions to dispersion and absorption
+    for iElements in 1:nElements
+        Dispersion += wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
+                      1e6 / molecularWeight * element_counts[iElements] .* interpf1
+        Absorption += wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
+                      1e6 / molecularWeight * element_counts[iElements] .* interpf2
+        f1 += element_counts[iElements] .* interpf1
+        f2 += element_counts[iElements] .* interpf2
+    end
+
+    ElectronDensity += 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30
 
     CriticalAngle = sqrt.(2 * Dispersion) * 180 / π
     AttLength = wavelength ./ Absorption / (4 * π) * 1e2
     reSLD = Dispersion * 2 * π ./ wavelength .^ 2 / 1e20
     imSLD = Absorption * 2 * π ./ wavelength .^ 2 / 1e20
 
-    Xresult = Dict(
-        "Formula" => formulaStr,
-        "MW" => molecularWeight,
-        "Number Of Electrons" => numberOfElectrons,
-        "Density" => massDensity,
-        "Electron Density" => 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30,
-        "Energy" => energy,
-        "Wavelength" => wavelength * 1e10,
-        "Dispersion" => Dispersion,
-        "Absorption" => Absorption,
-        "f1" => f1,
-        "f2" => f2,
-        "Critical Angle" => CriticalAngle,
-        "Attenuation Length" => AttLength,
-        "reSLD" => reSLD,
-        "imSLD" => imSLD,
-    )
-    return Xresult
+    # Create and return X-ray result struct
+    result = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
+        ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
+        f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
+
+    return result
 end
-end
+
+end  # module
