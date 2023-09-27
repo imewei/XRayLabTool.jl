@@ -87,8 +87,8 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     formulaElement, element_counts = parse_formula(formulaStr)
 
     nElements = length(formulaElement)
-    atomicNumber = Vector{Int}(undef, nElements)
-    atomicWeight = Vector{Float64}(undef, nElements)
+    atomicNumber = []
+    atomicWeight = []
     molecularWeight = 0.0
     numberOfElectrons = 0.0
 
@@ -96,7 +96,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     for iElements in 1:nElements
         AN = findall(x -> x == formulaElement[iElements], [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],)
         push!(atomicNumber, AN[1])
-        push!(atomicWeight, elements[atomicNumber[iElements]].atomic_mass)
+        push!(atomicWeight, ustrip(elements[atomicNumber[iElements]].atomic_mass))
     end
 
     # Determine molecular weight and number of electrons
