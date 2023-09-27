@@ -2,8 +2,7 @@ module XRayLabTool
 
 using CSV
 using DataFrames
-using Interpolations
-# using PCHIPInterpolation
+using PCHIPInterpolation
 using Mendeleev: elements
 using Unitful
 
@@ -45,12 +44,8 @@ end
 
 # Helper function to interpolate atomic scattering factors
 function interpolate_f(E, f1, f2)
-    # use PCHIPInterpolation
-    # itp1 = Interpolator(E, f1)
-    # itp2 = Interpolator(E, f2)
-    # use Interpolations
-    itp1 = interpolate((E,), f1, Gridded(Linear()))
-    itp2 = interpolate((E,), f2, Gridded(Linear()))
+    itp1 = Interpolator(E, f1)
+    itp2 = Interpolator(E, f2)
     return itp1, itp2
 end
 
