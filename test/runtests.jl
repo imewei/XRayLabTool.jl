@@ -2,7 +2,7 @@ using XRayLabTool
 using Test
 
 # Define a custom approximation testing function
-function assert_approx_equal(actual, expected; tol = 100)
+function assert_approx_equal(actual, expected; tol = 1)
     @test length(actual) == length(expected)
     @test all(abs.(actual .- expected) .< tol)
 end
