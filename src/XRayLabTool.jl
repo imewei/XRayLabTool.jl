@@ -4,7 +4,7 @@ using CSV
 using DataFrames
 using Interpolations
 # using PCHIPInterpolation
-using PeriodicTable: elements
+using Mendeleev: elements
 using Unitful
 
 export Refrac, SubRefrac, XRayResult
