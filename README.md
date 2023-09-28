@@ -31,19 +31,19 @@ Output:
 
 Example 1: >> result=Refrac(["H2O","Si3N4"], [8.04778], [1,3.44])  
                 
-                Output: Dict{String, XRayResult} with 2 entries:
+              Output: Dict{String, XRayResult} with 2 entries:
                           "Si3N4" => XRayResult("Si3N4", 140.283, 1.03372, 3.44, 1.03372…
                           "H2O"   => XRayResult("H2O", 18.015, 0.334285, 1.0, 0.334285, …
                 
-                result["Si3N4"] = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
-                                    ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
-                                    f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
+              result["Si3N4"] = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
+                               ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
+                               f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
                 
-                result["H2O"] = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
-                                    ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
-                                    f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
+             result["H2O"] = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
+                               ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
+                               f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
                 
-                For example,    result["Si3N4"].reSLD[1] = 2.955439362415408e-5
+             For example,    result["Si3N4"].reSLD[1] = 2.955439362415408e-5
 
 
 Example 2: >>result=SubRefrac("SiO2",Vector(8:0.5:10),2.33)  
