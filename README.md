@@ -1,6 +1,6 @@
 # XRayLabTool
 
-## Material property when interacting with x-rays
+## Material property when interacting with X-rays
 
 Usage:  
     result = Refrac([Chemical Formulas], [Energy], [MassDensity])  
