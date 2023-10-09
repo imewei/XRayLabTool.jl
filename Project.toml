@@ -6,6 +6,7 @@ version = "0.2.0"
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+JuliaFormatter = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
 PCHIPInterpolation = "afe20452-48d1-4729-9a8b-50fb251f06cd"
 PeriodicTable = "7b2266bf-644c-5ea3-82d8-af4bbd25a884"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

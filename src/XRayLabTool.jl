@@ -51,7 +51,11 @@ function interpolate_f(E, f1, f2)
 end
 
 # Main function to calculate X-ray properties
-function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensityList::Vector{Float64})
+function Refrac(
+    formulaList::Vector{String},
+    energy::Vector{Float64},
+    massDensityList::Vector{Float64},
+)
     if any(!isa(arg, Vector) for arg in [formulaList, energy, massDensityList])
         println("Invalid input: Arguments must be vectors.")
         return nothing
@@ -76,9 +80,9 @@ function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensit
 
     results = Dict{String,XRayResult}()
 
-#    for (formula, massDensity) in zip(formulaList, massDensityList)
-#        results[formula] = SubRefrac(formula, energy, massDensity)
-#    end
+    #    for (formula, massDensity) in zip(formulaList, massDensityList)
+    #        results[formula] = SubRefrac(formula, energy, massDensity)
+    #    end
 
     # Define a threaded function to process each chemical formula
     function process_formula(formula, massDensity)
@@ -86,7 +90,7 @@ function Refrac(formulaList::Vector{String}, energy::Vector{Float64}, massDensit
     end
 
     # Use threads to process chemical formulas concurrently
-    @threads for i in 1:length(formulaList)
+    @threads for i = 1:length(formulaList)
         process_formula(formulaList[i], massDensityList[i])
     end
 
@@ -104,14 +108,17 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     numberOfElectrons = 0.0
 
     # Determine the atomic number and atomic weight
-    for iElements in 1:nElements
-        AN = findall(x -> x == formulaElement[iElements], [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],)
+    for iElements = 1:nElements
+        AN = findall(
+            x -> x == formulaElement[iElements],
+            [elements[iAtomicnum].symbol for iAtomicnum in eachindex(elements)],
+        )
         push!(atomicNumber, AN[1])
         push!(atomicWeight, ustrip(elements[atomicNumber[iElements]].atomic_mass))
     end
 
     # Determine molecular weight and number of electrons
-    for iElements in 1:nElements
+    for iElements = 1:nElements
         molecularWeight += element_counts[iElements] * ustrip(atomicWeight[iElements])
         numberOfElectrons += atomicNumber[iElements] * element_counts[iElements]
     end
@@ -129,7 +136,7 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     f1f2Table = []
 
     # Read f1 and f2 from tables
-    for iElements in 1:nElements
+    for iElements = 1:nElements
         fname = join([lowercase(formulaElement[iElements]), ".nff"])
         file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
 
@@ -145,23 +152,32 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     # Interpolate to get f1 and f2 for given energies
     interpf1 = []
     interpf2 = []
-    for iElements in 1:nElements
-        itp1, itp2 = interpolate_f(f1f2Table[iElements].E, f1f2Table[iElements].f1, f1f2Table[iElements].f2)
+    for iElements = 1:nElements
+        itp1, itp2 = interpolate_f(
+            f1f2Table[iElements].E,
+            f1f2Table[iElements].f1,
+            f1f2Table[iElements].f2,
+        )
         push!(interpf1, [itp1(E) for E in energy * 1000])
         push!(interpf2, [itp2(E) for E in energy * 1000])
     end
 
     # Calculate contributions to dispersion and absorption
-    for iElements in 1:nElements
-        Dispersion = Dispersion .+ wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
-                      1e6 / molecularWeight * element_counts[iElements] .* interpf1[iElements]
-        Absorption = Absorption .+ wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity *
-                      1e6 / molecularWeight * element_counts[iElements] .* interpf2[iElements]
-        f1 = f1 .+  element_counts[iElements] .* interpf1[iElements]
-        f2 = f2 .+  element_counts[iElements] .* interpf2[iElements]
+    for iElements = 1:nElements
+        Dispersion =
+            Dispersion .+
+            wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 /
+            molecularWeight * element_counts[iElements] .* interpf1[iElements]
+        Absorption =
+            Absorption .+
+            wavelength .^ 2 / (2 * π) * thompson * avogadro * massDensity * 1e6 /
+            molecularWeight * element_counts[iElements] .* interpf2[iElements]
+        f1 = f1 .+ element_counts[iElements] .* interpf1[iElements]
+        f2 = f2 .+ element_counts[iElements] .* interpf2[iElements]
     end
 
-    ElectronDensity += 1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30
+    ElectronDensity +=
+        1e6 * massDensity / molecularWeight * avogadro * numberOfElectrons / 1e30
 
     CriticalAngle = sqrt.(2 * Dispersion) * 180 / π
     Attenuation_Length = wavelength ./ Absorption / (4 * π) * 1e2
@@ -169,9 +185,23 @@ function SubRefrac(formulaStr::String, energy::Vector{Float64}, massDensity::Flo
     imSLD = Absorption * 2 * π ./ wavelength .^ 2 / 1e20
 
     # Create and return X-ray result struct
-    result = XRayResult(formulaStr, molecularWeight, ElectronDensity, massDensity,
-        ElectronDensity, energy, wavelength * 1e10, Dispersion, Absorption,
-        f1, f2, CriticalAngle, Attenuation_Length, reSLD, imSLD)
+    result = XRayResult(
+        formulaStr,
+        molecularWeight,
+        ElectronDensity,
+        massDensity,
+        ElectronDensity,
+        energy,
+        wavelength * 1e10,
+        Dispersion,
+        Absorption,
+        f1,
+        f2,
+        CriticalAngle,
+        Attenuation_Length,
+        reSLD,
+        imSLD,
+    )
 
     return result
 end
