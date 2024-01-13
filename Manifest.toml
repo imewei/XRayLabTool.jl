@@ -2,7 +2,7 @@
 
 julia_version = "1.10.0"
 manifest_format = "2.0"
-project_hash = "fc1e97ab13027132105061a7fe9813ce569cc464"
+project_hash = "ed311eff093746a7912bf25664c82280d9bce002"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -215,9 +215,9 @@ uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.6.3"
 
 [[deps.PCHIPInterpolation]]
-git-tree-sha1 = "baafa6cd49de9333406ee5b4de6b0a32c0de5745"
+git-tree-sha1 = "0a19c7df8f154657088ac84b58347863e45c465d"
 uuid = "afe20452-48d1-4729-9a8b-50fb251f06cd"
-version = "0.1.11"
+version = "0.2.0"
 
     [deps.PCHIPInterpolation.extensions]
     PCHIPInterpolationRecipesBaseExt = "RecipesBase"
