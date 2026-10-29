@@ -639,25 +639,19 @@ function accumulate_optical_coefficients!(
         x_lo = first(xs)
         x_hi = last(xs)
         last_interval = lastindex(xs) - 1
-        # Seed the walk with one binary search so a lone high-energy point is not walked to
-        j = clamp(searchsortedlast(xs, energies_eV[1]), firstindex(xs), last_interval)
+        j = firstindex(xs)
 
         @inbounds for i in 1:n_energies
             x = energies_eV[i]
             if shared_grid && x_lo <= x <= x_hi
-                if x < xs[j]  # out-of-order input: re-locate instead of walking backwards
+                # Binary-search when moving backwards (unsorted input) or more than 8 nodes
+                # ahead (sparse energies, or the first point); otherwise the walk below takes
+                # at most 8 steps. Both routes select the same interval.
+                if x < xs[j] || x >= xs[min(j + 8, last_interval + 1)]
                     j = clamp(searchsortedlast(xs, x), firstindex(xs), last_interval)
                 end
-                # Walk a few nodes; a larger jump (sparse energies) falls back to binary search, which
-                # selects the same interval, so the walk never costs O(grid) per point
-                steps = 0
                 while j < last_interval && x >= xs[j + 1]
                     j += 1
-                    steps += 1
-                    if steps == 8
-                        j = clamp(searchsortedlast(xs, x), firstindex(xs), last_interval)
-                        break
-                    end
                 end
                 f1_val, f2_val = _hermite_pair(itp1, itp2, x, j)
             else

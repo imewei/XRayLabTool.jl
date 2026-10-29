@@ -17,7 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adheri
 - Docs: δ/β equations now show the 10⁶ g/cm³→g/m³ factor, the constants table matches the code, f₁/f₂ units are per formula unit, the quick-start no longer indexes batch results by formula string, and `ų` typos are corrected to `Å³`
 
 ### Performance
-- Evaluate f₁ and f₂ of each element together: the energy interval is located once (monotone walk over the sorted energies, binary-search seeded) and the Hermite basis terms are shared. Results are bit-identical to the previous per-point `itp(x)` evaluation (verified for all 92 elements by `test/test_edge_cases.jl`). Single material, 1k energies: 70 → 24 µs; 8-formula batch, 1k energies: 706 → 231 µs (1 thread)
+- Evaluate f₁ and f₂ of each element together: the energy interval is located once (a short forward walk over the sorted energies, with a binary-search relocation for the first point, sparse energies and out-of-order input) and the Hermite basis terms are shared. Results are bit-identical to the previous per-point `itp(x)` evaluation (verified for all 92 elements by `test/test_edge_cases.jl`). Single material, 1k energies: 70 → 24 µs; 8-formula batch, 1k energies: 706 → 231 µs (1 thread)
 - `precompile` statements for the public entry points cut the first batch call from ~30-50 ms to ~1 ms
 - `accumulate_optical_coefficients!` returns immediately for empty input
 
