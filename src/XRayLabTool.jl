@@ -283,16 +283,15 @@ function atomic_number_and_mass(element_symbol::String)
         return cached
     end
 
-    # Search periodic table for element
-    local atomic_number::Int
-    local atomic_mass::Float64
-    try
-        elem = chem_elements[Symbol(element_symbol)]
-        atomic_number = Int(elem.atomic_number)
-        atomic_mass = Float64(ustrip(elem.atomic_weight))
-    catch
+    # Search periodic table for element; only a missing key means "unknown element"
+    elem = try
+        chem_elements[Symbol(element_symbol)]
+    catch e
+        e isa KeyError || rethrow()
         throw(ArgumentError("Element $element_symbol not found in periodic table"))
     end
+    atomic_number = Int(elem.atomic_number)
+    atomic_mass = Float64(ustrip(elem.atomic_weight))
 
     result = (atomic_number, atomic_mass)
 
@@ -475,6 +474,36 @@ function _parse_number(s::String, pos::Int)
 end
 
 """
+    _read_nff_interpolators(file, element_symbol) -> (f1_interpolator, f2_interpolator, n_points)
+
+Read an `.nff` table (header line, then `energy_eV,f1,f2` rows) and build the PCHIP
+interpolators. A failure here means the bundled data file is unreadable or corrupt, not that
+the user supplied a bad formula, so it raises `ErrorException` (never `ArgumentError`, which
+`_validate_formulas` would report as an invalid formula).
+"""
+function _read_nff_interpolators(file::String, element_symbol::String)
+    try
+        lines = readlines(file)
+        n = length(lines) - 1  # Skip header
+        energy = Vector{Float64}(undef, n)
+        f1_data = Vector{Float64}(undef, n)
+        f2_data = Vector{Float64}(undef, n)
+        for j in 1:n
+            parts = split(lines[j + 1], ',')
+            energy[j] = parse(Float64, parts[1])
+            f1_data[j] = parse(Float64, parts[2])
+            f2_data[j] = parse(Float64, parts[3])
+        end
+        return Interpolator(energy, f1_data), Interpolator(energy, f2_data), n
+    catch e
+        error(
+            "Scattering-factor data for element $element_symbol is unreadable or corrupt ($file): " *
+            sprint(showerror, e),
+        )
+    end
+end
+
+"""
     load_element_interpolators(element_symbol::String) -> (PCHIPInterp, PCHIPInterp)
 
 Load and cache PCHIP interpolators for an element's scattering factors.
@@ -489,7 +518,8 @@ Returns cached interpolator pair if available, otherwise loads the element's
 - `Tuple{PCHIPInterp, PCHIPInterp}`: (f1_interpolator, f2_interpolator)
 
 # Throws
-- `ArgumentError`: If element data file cannot be found
+- `ArgumentError`: If the element has no data file (unknown element)
+- `ErrorException`: If the data file exists but cannot be read or parsed
 """
 function load_element_interpolators(element_symbol::String)
     cached = lock(INTERPOLATOR_LOCK) do
@@ -510,30 +540,21 @@ function load_element_interpolators(element_symbol::String)
     file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
     @debug "Resolving .nff file" _group = :io element = element_symbol path = file
 
-    # Load data file and build interpolators (outside lock)
-    local itp_f1::PCHIPInterp
-    local itp_f2::PCHIPInterp
-    t_io = time_ns()
-    try
-        lines = readlines(file)
-        n = length(lines) - 1  # Skip header
-        energy = Vector{Float64}(undef, n)
-        f1_data = Vector{Float64}(undef, n)
-        f2_data = Vector{Float64}(undef, n)
-        for j in 1:n
-            parts = split(lines[j + 1], ',')
-            energy[j] = parse(Float64, parts[1])
-            f1_data[j] = parse(Float64, parts[2])
-            f2_data[j] = parse(Float64, parts[3])
-        end
-        itp_f1 = Interpolator(energy, f1_data)
-        itp_f2 = Interpolator(energy, f2_data)
-        elapsed_io_ms = (time_ns() - t_io) / NS_PER_MS
-        @debug "Loaded .nff file" _group = :io element = element_symbol data_points = n elapsed_ms =
-            round(elapsed_io_ms; digits = 3)
-    catch e
-        throw(ArgumentError("Element $element_symbol is NOT in the table list: $e"))
+    # A missing data file is the expected "unknown element" case
+    if !isfile(file)
+        throw(
+            ArgumentError(
+                "Element $element_symbol is NOT in the table list (no file $fname)",
+            ),
+        )
     end
+
+    # Load data file and build interpolators (outside lock)
+    t_io = time_ns()
+    itp_f1, itp_f2, n = _read_nff_interpolators(file, element_symbol)
+    elapsed_io_ms = (time_ns() - t_io) / NS_PER_MS
+    @debug "Loaded .nff file" _group = :io element = element_symbol data_points = n elapsed_ms =
+        round(elapsed_io_ms; digits = 3)
 
     result = (itp_f1, itp_f2)
 

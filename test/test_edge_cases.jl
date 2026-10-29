@@ -900,3 +900,38 @@ end
         z, z, 1.0, 1.0, X.ElementInterpolatorData[(1.0, i1, i2)], z, z, z, z,
     ) === nothing
 end
+
+@testset "Unknown elements are ArgumentErrors; corrupt data files are not" begin
+    X = XRayLabTool
+    # Expected user-facing failures keep their type
+    @test_throws ArgumentError X.atomic_number_and_mass("Xx")
+    @test_throws ArgumentError X.atomic_number_and_mass("si")  # symbols are case-sensitive
+    @test_throws ArgumentError X.load_element_interpolators("Np")  # known element, no data file
+    @test_throws ArgumentError X._validate_formulas(["Np"])
+
+    # An existing but unreadable/corrupt table is an internal error, not an invalid formula
+    mktempdir() do dir
+        write_nff(name, body) = (path = joinpath(dir, name); write(path, body); path)
+        header = "Energy(eV), f1, f2\n"
+        good = write_nff("good.nff", header * "10.0,1.0,0.1\n20.0,2.0,0.2\n30.0,3.0,0.3\n")
+        i1, i2, n = X._read_nff_interpolators(good, "Zz")
+        @test n == 3 && i1(20.0) == 2.0 && i2(20.0) == 0.2
+
+        corrupt = Dict(
+            "non-numeric field" => header * "10.0,abc,0.1\n20.0,2.0,0.2\n",
+            "short row" => header * "10.0,1.0\n20.0,2.0,0.2\n",
+            "non-increasing energies" => header * "20.0,1.0,0.1\n10.0,2.0,0.2\n",
+        )
+        for (label, body) in corrupt
+            path = write_nff(replace(label, ' ' => '_') * ".nff", body)
+            err = try
+                X._read_nff_interpolators(path, "Zz")
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException && !(err isa ArgumentError)
+            @test occursin("Zz", err.msg) && occursin(path, err.msg)
+        end
+    end
+end
