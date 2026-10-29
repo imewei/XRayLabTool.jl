@@ -30,8 +30,8 @@ result.energy               # [5.0, 6.0, ..., 20.0] keV
 result.wavelength           # corresponding wavelengths in Å
 result.dispersion           # δ values
 result.absorption           # β values
-result.f1                   # real scattering factor (per molecule)
-result.f2                   # imaginary scattering factor (per molecule)
+result.f1                   # real scattering factor (summed over the formula unit)
+result.f2                   # imaginary scattering factor (summed over the formula unit)
 result.critical_angle       # critical angles in degrees
 result.attenuation_length   # 1/e attenuation lengths in cm
 result.real_sld             # real part of SLD in Å⁻²
@@ -61,9 +61,13 @@ println("Au critical angle at 8 keV: ", au.critical_angle[71])
 | Parameter | Constraint |
 |-----------|------------|
 | Formula | Case-sensitive: `"CO"` = Carbon Monoxide, `"Co"` = Cobalt |
-| Energy | Must be in range **0.03 – 30.0 keV** |
-| Density | Positive `Float64` in g/cm³ |
+| Energy | Finite and in range **0.03 – 30.0 keV**; `result.energy` is returned sorted ascending |
+| Density | Positive, finite `Float64` in g/cm³ |
 | Formula count | Must match density count in batch mode |
+| Element counts | Positive and finite; zero counts (`H0`) and counts that overflow or underflow the molecular weight are rejected |
+| Nesting | At most 64 levels of parentheses |
+
+All violations raise `ArgumentError`.
 
 ## Chemical formula syntax
 

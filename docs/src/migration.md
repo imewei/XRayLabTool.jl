@@ -42,7 +42,7 @@ sio2 = results[1]  # index-based access
 
 - 4.5× faster precompilation (removed ~38 transitive dependencies)
 - 3.6× faster single-material calculations (cached interpolators, fused loops)
-- Thread-safe caching with lock-free reads
+- Thread-safe caching (the lock-free read path introduced here was later removed because it raced with `clear_caches!`; see the [Changelog](changelog.md))
 - Proper `@threads :dynamic` scheduling for batch calculations
 - Energy range validation on single-material path (was only on batch path before)
 - Fixed Fluorine data file (`f.nff`) that had a typo preventing BaF₂, CaF₂, etc.
