@@ -14,7 +14,6 @@ for XRayLabTool. Covers gaps not addressed by the existing test suite:
 - Cache lifecycle (clear_caches!)
 - XRayResult field completeness & propertynames
 - Boundary precision at energy limits
-- NIST reference data comparison (Si, SiO2, H2O, Au)
 - Fluorine-containing compounds (previously broken data file)
 - Performance regression guards
 """
@@ -709,5 +708,69 @@ end
         XRayLabTool.clear_caches!()
         result2 = calculate_single_material_properties("H2O", [8.0], 1.0)
         @test result2.formula == "H2O"
+    end
+end
+
+# =======================================================================================
+# 17. REGRESSION TESTS FOR REVIEW FINDINGS
+# =======================================================================================
+
+@testset "Zero element counts are rejected (no silent NaN)" begin
+    for f in ("H0", "(SiO2)0", "SiO0")
+        @test_throws ArgumentError XRayLabTool.parse_formula(f)
+        @test_throws ArgumentError calculate_single_material_properties(f, [8.0], 2.2)
+        @test_throws ArgumentError calculate_xray_properties([f], [8.0], [2.2])
+    end
+    # Fractional counts remain valid
+    @test XRayLabTool.parse_formula("H0.5He0.5")[2] == [0.5, 0.5]
+end
+
+@testset "Result energy does not alias caller or sibling results" begin
+    for inp in ([8.0, 10.0], [10.0, 8.0])  # already sorted / unsorted
+        r = calculate_single_material_properties("SiO2", inp, 2.2)
+        @test r.energy !== inp
+        rs = calculate_xray_properties(["SiO2", "Al2O3"], inp, [2.2, 3.95])
+        @test rs[1].energy !== rs[2].energy
+        @test rs[1].energy !== inp
+        rs[1].energy[1] = -1.0
+        @test rs[2].energy[1] == 8.0
+    end
+end
+
+@testset "Debug log values are rendered, not closures" begin
+    logger = Test.TestLogger(min_level = Logging.Debug)
+    Logging.with_logger(logger) do
+        calculate_single_material_properties("SiO2", [8.0, 10.0], 2.2)
+    end
+    vals = [v for rec in logger.logs for (_, v) in rec.kwargs]
+    @test !any(v -> v isa Function, vals)
+end
+
+@testset "Non-finite element counts are rejected" begin
+    n = repeat("9", 200)  # parses to Inf
+    @test_throws ArgumentError XRayLabTool.parse_formula("(H" * n * ")" * n)
+    @test_throws ArgumentError calculate_single_material_properties("H" * n * n, [8.0], 1.0)
+end
+
+@testset "Property access is type-stable" begin
+    r = calculate_single_material_properties("Si", [8.0], 2.33)
+    get_dispersion(x) = x.dispersion
+    get_mw(x) = x.molecular_weight
+    @inferred get_dispersion(r)
+    @inferred get_mw(r)
+    @test r.Energy === r.energy  # legacy names still resolve
+    @test_throws Exception r.not_a_field  # ErrorException (<1.12) / FieldError (>=1.12)
+end
+
+@testset "delta and beta match the closed-form expression (tight tolerance)" begin
+    # delta = (λ²/2π) r_e (ρ N_A / M) Σ n_i f1_i, with ρ converted g/cm³ → g/m³ (×1e6)
+    for (formula, ρ) in (("Si", 2.33), ("SiO2", 2.2), ("Au", 19.3))
+        r = calculate_single_material_properties(formula, [5.0, 8.0, 20.0], ρ)
+        λ = r.wavelength .* 1e-10
+        pref =
+            λ .^ 2 ./ (2π) .* XRayLabTool.THOMSON_SCATTERING_LENGTH .*
+            (ρ * 1e6 * XRayLabTool.AVOGADRO / r.molecular_weight)
+        @test r.dispersion ≈ pref .* r.f1 rtol = 1e-9
+        @test r.absorption ≈ pref .* r.f2 rtol = 1e-9
     end
 end

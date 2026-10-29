@@ -116,9 +116,11 @@ const _LEGACY_FIELD_MAP = Dict{Symbol, Symbol}(
     :imSLD => :imag_sld,
 )
 
+# Real fields take the `hasfield` branch, which constant-folds for literal names and keeps
+# `result.field` type-stable; only legacy names consult the map.
 function Base.getproperty(result::XRayResult, name::Symbol)
-    mapped = get(_LEGACY_FIELD_MAP, name, name)
-    return getfield(result, mapped)
+    hasfield(XRayResult, name) && return getfield(result, name)
+    return getfield(result, get(_LEGACY_FIELD_MAP, name, name))
 end
 
 function Base.propertynames(::XRayResult, private::Bool = false)
@@ -148,7 +150,7 @@ const KEV_TO_EV = 1000.0
 const M_TO_ANGSTROM = 1e10
 const M_TO_CM = 1e2
 const NS_PER_MS = 1e6
-const ELECTRON_DENSITY_FACTOR = AVOGADRO * 1e6 / 1e30  # Nₐ × (cm³→m³) / (m³→ų): converts (ρ/M)·Z to electrons/ų
+const ELECTRON_DENSITY_FACTOR = AVOGADRO * 1e6 / 1e30  # Nₐ × (cm³→m³) / (m³→Å³): converts (ρ/M)·Z to electrons/Å³
 const SLD_FACTOR = 2 * π / 1e20                          # Å⁻² conversion
 
 # Deprecation bridges for backward compatibility
@@ -166,15 +168,13 @@ Caches for performance optimization:
 - INTERPOLATOR_CACHE: Stores pre-built PCHIP interpolator pairs (f1, f2) per element
 
 Both caches are protected by locks for thread safety during parallel processing.
+Every read and write goes through the lock: a lock-free read would race with
+`clear_caches!` and with concurrent cache population from other tasks.
 """
 const ATOMIC_DATA_CACHE = Dict{String, Tuple{Int, Float64}}()
 const ATOMIC_DATA_LOCK = ReentrantLock()
 const INTERPOLATOR_CACHE = Dict{String, Tuple{PCHIPInterp, PCHIPInterp}}()
 const INTERPOLATOR_LOCK = ReentrantLock()
-# When true, caches are fully populated and can be read without locks.
-# Set to true after _validate_formulas completes (batch path only); reset by clear_caches!.
-# Single-material calls always use the locked read path since they don't call _validate_formulas.
-const CACHES_FROZEN = Threads.Atomic{Bool}(false)
 
 # =====================================================================================
 # VALIDATION
@@ -210,7 +210,9 @@ function _validate_formulas(formulaList::Vector{String})
                 atomic_number_and_mass(sym)
                 load_element_interpolators(sym)
             end
-        catch
+        catch e
+            # Only expected failures mean "invalid formula"; surface real internal errors
+            e isa ArgumentError || rethrow()
             push!(invalid, formula)
         end
     end
@@ -224,7 +226,6 @@ function _validate_formulas(formulaList::Vector{String})
             ),
         )
     end
-    CACHES_FROZEN[] = true
     @debug "All formulas validated" _group = :validation formula_count = length(formulaList)
 end
 
@@ -248,16 +249,6 @@ Uses caching to avoid repeated lookups of the same element.
 - 'ArgumentError': If element symbol is not found in periodic table
 """
 function atomic_number_and_mass(element_symbol::String)
-    # Lock-free read when caches are frozen (after _validate_formulas)
-    if CACHES_FROZEN[]
-        cached = get(ATOMIC_DATA_CACHE, element_symbol, nothing)
-        if cached !== nothing
-            @debug "Atomic data cache hit (frozen)" _group = :cache element = element_symbol
-            return cached
-        end
-    end
-
-    # Locked read — required during cache population
     cached = lock(ATOMIC_DATA_LOCK) do
         get(ATOMIC_DATA_CACHE, element_symbol, nothing)
     end
@@ -302,7 +293,7 @@ Parse a chemical formula string into element symbols and their counts.
 - 'Tuple{Vector{String}, Vector{Float64}}': (element_symbols, element_counts)
 
 # Examples
-'''julia
+```julia
 symbols, counts = parse_formula("SiO2")
 # symbols = ["Si", "O"], counts = [1.0, 2.0]
 
@@ -314,7 +305,7 @@ symbols, counts = parse_formula("Ca(OH)2")
 
 symbols, counts = parse_formula("Ca3(PO4)2")
 # symbols = ["Ca", "P", "O"], counts = [3.0, 2.0, 8.0]
-'''
+```
 
 # Throws
 - 'ArgumentError': If formula string is invalid or empty
@@ -341,6 +332,14 @@ function parse_formula(formulaStr::String)
     if isempty(elements)
         @debug "Formula rejected: no elements found" _group = :parser formula = formulaStr
         throw(ArgumentError("Invalid chemical formula: $formulaStr"))
+    end
+
+    if any(c -> !(isfinite(c) && c > 0), counts)
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: element counts must be positive and finite in \"$formulaStr\"",
+            ),
+        )
     end
 
     @debug "Formula parsed" _group = :parser formula = formulaStr elements =
@@ -461,17 +460,6 @@ Returns cached interpolator pair if available, otherwise loads the element's
 - `ArgumentError`: If element data file cannot be found
 """
 function load_element_interpolators(element_symbol::String)
-    # Lock-free read when caches are frozen (after _validate_formulas)
-    if CACHES_FROZEN[]
-        cached = get(INTERPOLATOR_CACHE, element_symbol, nothing)
-        if cached !== nothing
-            @debug "Interpolator cache hit (frozen)" _group = :cache element =
-                element_symbol
-            return cached
-        end
-    end
-
-    # Locked read — required during cache population
     cached = lock(INTERPOLATOR_LOCK) do
         get(INTERPOLATOR_CACHE, element_symbol, nothing)
     end
@@ -696,7 +684,7 @@ function _calculate_xray_properties_impl(
         round(elapsed_validate_ms; digits = 3)
 
     # ==================================================================================
-    # PARALLEL CALCULATION (lock-free: Vector indexed writes, caches are read-only)
+    # PARALLEL CALCULATION (each task writes its own results_vec slot; cache reads take a short lock)
     # ==================================================================================
 
     n_formulas = length(formulaList)
@@ -744,10 +732,8 @@ function _calculate_single_material_impl(
 
     t_start = time_ns()
 
-    # Sort energies for consistent output (skip if already sorted — e.g., from batch path)
-    if !issorted(energies_keV)
-        energies_keV = sort(energies_keV)
-    end
+    # Sorted private copy: the result must not alias the caller's vector (or sibling results)
+    energies_keV = issorted(energies_keV) ? copy(energies_keV) : sort(energies_keV)
 
     @debug "Single-material calculation started" _group = :computation formula = formulaStr density =
         massDensity energy_count = length(energies_keV)
@@ -839,16 +825,17 @@ function _calculate_single_material_impl(
         _compute_derived_quantities(wavelengths_m, delta, beta)
 
     @debug "Derived quantities computed" _group = :computation formula = formulaStr electron_density =
-        () -> round(electron_density; sigdigits = 6) critical_angle_range =
-        () ->
-            "($(round(minimum(critical_angle); sigdigits=4)), $(round(maximum(critical_angle); sigdigits=4)))" attenuation_length_range =
-        () ->
-            "($(round(minimum(attenuation_length); sigdigits=4)), $(round(maximum(attenuation_length); sigdigits=4)))"
+        round(electron_density; sigdigits = 6) critical_angle_range = (
+        round(minimum(critical_angle); sigdigits = 4),
+        round(maximum(critical_angle); sigdigits = 4),
+    ) attenuation_length_range = (
+        round(minimum(attenuation_length); sigdigits = 4),
+        round(maximum(attenuation_length); sigdigits = 4),
+    )
 
     @debug "Result summary" _group = :computation formula = formulaStr delta_range =
-        () -> "($(minimum(delta)), $(maximum(delta)))" beta_range =
-        () -> "($(minimum(beta)), $(maximum(beta)))" sld_range =
-        () -> "($(minimum(re_sld)), $(maximum(re_sld)))"
+        (minimum(delta), maximum(delta)) beta_range = (minimum(beta), maximum(beta)) sld_range =
+        (minimum(re_sld), maximum(re_sld))
 
     elapsed_ms = (time_ns() - t_start) / NS_PER_MS
     @debug "Material calculation complete" _group = :computation formula = formulaStr MW =
@@ -951,27 +938,23 @@ end
 
 Clear all cached data to free memory.
 
-This function clears both the atomic data cache and the f1f2 table cache.
+This function clears both the atomic data cache and the scattering-factor interpolator cache.
 Useful for memory management in long-running applications or when processing
 many different materials.
 
 # Examples
-'''julia
+```julia
 # After processing many materials, clear caches to free memory
-clear_caches!()
-'''
+XRayLabTool.clear_caches!()  # not exported
+```
 """
 function clear_caches!()
-    # Empty caches under lock BEFORE clearing the frozen flag.
-    # This prevents a race where another thread reads CACHES_FROZEN==true
-    # and then does a lock-free get() on a Dict being emptied concurrently.
     lock(ATOMIC_DATA_LOCK) do
         empty!(ATOMIC_DATA_CACHE)
     end
     lock(INTERPOLATOR_LOCK) do
         empty!(INTERPOLATOR_CACHE)
     end
-    CACHES_FROZEN[] = false
     @debug "Caches cleared" _group = :cache
 end
 

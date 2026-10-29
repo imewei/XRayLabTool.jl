@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhering to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Data race on the element caches: the lock-free `CACHES_FROZEN` read path raced with `clear_caches!` and with concurrent cache population, causing crashes or spurious "Invalid formulas" errors under multithreaded use. All cache reads now take the lock; `CACHES_FROZEN` is removed
+- `_validate_formulas` no longer reports unexpected internal errors as invalid formulas; only `ArgumentError`s are collected
+- Formulas with a zero count (`H0`, `(SiO2)0`, `SiO0`) now raise `ArgumentError` instead of silently dropping the element or returning NaN results
+- `XRayResult.energy` is now a private copy; it no longer aliases the caller's vector or other results from the same batch
+- `@debug` output for derived quantities now shows values instead of `#NN (generic function ...)`
+- Formula counts that overflow to `Inf` (e.g. 200-digit counts) now raise `ArgumentError` instead of returning NaN properties
+- `result.<field>` access is type-stable again (the legacy-name lookup no longer sits on the hot path); legacy names such as `result.Energy` still work
+
+### Tests
+- Added a closed-form δ/β check (rtol 1e-9); the previous absolute tolerance (1e-6) let a 4% error in the optical coefficients pass
+
 ## [0.7.1] - 2026-03-28
 
 ### Fixed
