@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adheri
 
 ### Changed
 - Internal refactor, no behavior change: the molecular-weight and electron-count accumulation shared by `_validate_formulas` and the per-material calculation is one helper (`_molecular_weight_and_electrons`), the 0.03 / 30 keV limits are the named constants `MIN_ENERGY_KEV` / `MAX_ENERGY_KEV`, and an unused intermediate array was removed
+- The "Energy is out of range" error message is built from `MIN_ENERGY_KEV` / `MAX_ENERGY_KEV`, so the upper limit now reads `30.0KeV` instead of `30KeV`
 
 ## [0.7.2] - 2026-10-29
 

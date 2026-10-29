@@ -180,12 +180,12 @@ end
         @testset "Multi-Material Function Error Handling" begin
             # Test energy outside 0.03–30 keV range (below minimum)
             @testset "Energy below 0.03 keV" begin
-                @expect_error calculate_xray_properties(["SiO2"], [0.02, 5.0], [2.2]) r"Energy is out of range.*0\.03KeV.*30KeV"
+                @expect_error calculate_xray_properties(["SiO2"], [0.02, 5.0], [2.2]) r"Energy is out of range.*0\.03KeV.*30\.0KeV"
             end
 
             # Test energy outside 0.03–30 keV range (above maximum)
             @testset "Energy above 30 keV" begin
-                @expect_error calculate_xray_properties(["SiO2"], [5.0, 35.0], [2.2]) r"Energy is out of range.*0\.03KeV.*30KeV"
+                @expect_error calculate_xray_properties(["SiO2"], [5.0, 35.0], [2.2]) r"Energy is out of range.*0\.03KeV.*30\.0KeV"
             end
 
             # Test mismatched formulaList & massDensityList lengths
@@ -226,11 +226,11 @@ end
         @testset "Single Material Function Error Handling" begin
             # Test energy range validation on single-material path
             @testset "Single material energy below 0.03 keV" begin
-                @expect_error calculate_single_material_properties("SiO2", [0.01], 2.2) r"Energy is out of range.*0\.03KeV.*30KeV"
+                @expect_error calculate_single_material_properties("SiO2", [0.01], 2.2) r"Energy is out of range.*0\.03KeV.*30\.0KeV"
             end
 
             @testset "Single material energy above 30 keV" begin
-                @expect_error calculate_single_material_properties("SiO2", [50.0], 2.2) r"Energy is out of range.*0\.03KeV.*30KeV"
+                @expect_error calculate_single_material_properties("SiO2", [50.0], 2.2) r"Energy is out of range.*0\.03KeV.*30\.0KeV"
             end
 
             # Test invalid chemical formula
