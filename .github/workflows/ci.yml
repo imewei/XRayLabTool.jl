@@ -15,6 +15,7 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} (${{ matrix.threads }} threads)
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +30,12 @@ jobs:
             os: ubuntu-latest
             threads: 1
             coverage: false
+          # Canary: upcoming Julia prerelease, failures do not block
+          - version: 'pre'
+            os: ubuntu-latest
+            threads: 2
+            coverage: false
+            experimental: true
           # Platform: macOS smoke test on latest only
           - version: '1'
             os: macos-latest
