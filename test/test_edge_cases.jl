@@ -14,7 +14,6 @@ for XRayLabTool. Covers gaps not addressed by the existing test suite:
 - Cache lifecycle (clear_caches!)
 - XRayResult field completeness & propertynames
 - Boundary precision at energy limits
-- NIST reference data comparison (Si, SiO2, H2O, Au)
 - Fluorine-containing compounds (previously broken data file)
 - Performance regression guards
 """
@@ -709,5 +708,230 @@ end
         XRayLabTool.clear_caches!()
         result2 = calculate_single_material_properties("H2O", [8.0], 1.0)
         @test result2.formula == "H2O"
+    end
+end
+
+# =======================================================================================
+# 17. REGRESSION TESTS FOR REVIEW FINDINGS
+# =======================================================================================
+
+@testset "Zero element counts are rejected (no silent NaN)" begin
+    for f in ("H0", "(SiO2)0", "SiO0")
+        @test_throws ArgumentError XRayLabTool.parse_formula(f)
+        @test_throws ArgumentError calculate_single_material_properties(f, [8.0], 2.2)
+        @test_throws ArgumentError calculate_xray_properties([f], [8.0], [2.2])
+    end
+    # Fractional counts remain valid
+    @test XRayLabTool.parse_formula("H0.5He0.5")[2] == [0.5, 0.5]
+end
+
+@testset "Result energy does not alias caller or sibling results" begin
+    for inp in ([8.0, 10.0], [10.0, 8.0])  # already sorted / unsorted
+        r = calculate_single_material_properties("SiO2", inp, 2.2)
+        @test r.energy !== inp
+        rs = calculate_xray_properties(["SiO2", "Al2O3"], inp, [2.2, 3.95])
+        @test rs[1].energy !== rs[2].energy
+        @test rs[1].energy !== inp
+        rs[1].energy[1] = -1.0
+        @test rs[2].energy[1] == 8.0
+    end
+end
+
+@testset "Debug log values are rendered, not closures" begin
+    logger = Test.TestLogger(min_level = Logging.Debug)
+    Logging.with_logger(logger) do
+        calculate_single_material_properties("SiO2", [8.0, 10.0], 2.2)
+    end
+    vals = [v for rec in logger.logs for (_, v) in rec.kwargs]
+    @test !isempty(vals)  # guard against passing vacuously
+    @test !any(v -> v isa Function, vals)
+end
+
+@testset "Concurrent first touch of one element is consistent" begin
+    X = XRayLabTool
+    X.clear_caches!()
+    got = Vector{Any}(undef, 64)
+    Threads.@threads for k in 1:64
+        got[k] = (X.atomic_number_and_mass("Si"), X.load_element_interpolators("Si")[1].ys)
+    end
+    @test all(g -> g[1] == got[1][1], got)
+    @test all(g -> g[2] == got[1][2], got)
+end
+
+@testset "Non-finite element counts are rejected" begin
+    n = repeat("9", 200)  # 1e200 is finite; the product with a 200-digit multiplier is not
+    @test isfinite(XRayLabTool.parse_formula("H" * n)[2][1])
+    @test_throws ArgumentError XRayLabTool.parse_formula("(H" * n * ")" * n)
+    @test_throws ArgumentError calculate_single_material_properties("H" * n * n, [8.0], 1.0)
+end
+
+@testset "Counts outside the representable molecular-weight range are rejected" begin
+    subnormal = "H0." * "0"^319 * "1"  # count 1e-320: passes the positivity check, gave dispersion = Inf
+    huge = "H" * "9"^300               # count 1e300 * 1.008 stays finite; times itself overflows
+    for f in (subnormal, "(" * huge * ")" * "9"^100)
+        @test_throws ArgumentError calculate_single_material_properties(f, [8.0], 1.0)
+        @test_throws ArgumentError calculate_xray_properties([f], [8.0], [1.0])
+    end
+    # A large but representable count still works and scales delta by count / M only
+    r = calculate_single_material_properties("H1000", [8.0], 1.0)
+    @test all(isfinite, r.dispersion) && all(isfinite, r.attenuation_length)
+end
+
+@testset "Excessive parenthesis nesting raises ArgumentError, not a stack overflow" begin
+    deep = "("^100_000
+    @test_throws ArgumentError XRayLabTool.parse_formula(deep)
+    @test_throws ArgumentError calculate_xray_properties([deep], [8.0], [2.2])
+    ok = "("^XRayLabTool.MAX_FORMULA_NESTING * "H" * ")"^XRayLabTool.MAX_FORMULA_NESTING
+    @test XRayLabTool.parse_formula(ok) == (["H"], [1.0])
+end
+
+@testset "_validate_formulas does not mask internal errors as invalid formulas" begin
+    # Throw only for the @debug emitted inside the try block (parse_formula). Throwing for every
+    # message would also fire on the later "Formula validation failed" debug, outside the try,
+    # and make this test pass even if the exception were swallowed.
+    struct ThrowingLogger <: Logging.AbstractLogger end
+    Logging.min_enabled_level(::ThrowingLogger) = Logging.Debug
+    Logging.shouldlog(::ThrowingLogger, args...) = true
+    Logging.catch_exceptions(::ThrowingLogger) = false  # let the injected error propagate
+    function Logging.handle_message(::ThrowingLogger, level, message, args...; kwargs...)
+        message == "Parsing formula" && error("injected internal failure")
+        return nothing
+    end
+    @test_throws ErrorException Logging.with_logger(ThrowingLogger()) do
+        XRayLabTool._validate_formulas(["SiO2"])
+    end
+    # ...while a genuinely invalid formula is still reported as one
+    @test_throws ArgumentError XRayLabTool._validate_formulas(["Xx9"])
+end
+
+@testset "Property access is type-stable" begin
+    r = calculate_single_material_properties("Si", [8.0], 2.33)
+    get_dispersion(x) = x.dispersion
+    get_mw(x) = x.molecular_weight
+    @inferred get_dispersion(r)
+    @inferred get_mw(r)
+    @test r.Energy === r.energy  # legacy names still resolve
+    @test_throws Exception r.not_a_field  # ErrorException (<1.12) / FieldError (>=1.12)
+end
+
+@testset "delta and beta match the closed-form expression (tight tolerance)" begin
+    # delta = (λ²/2π) r_e (ρ N_A / M) Σ n_i f1_i, with ρ converted g/cm³ → g/m³ (×1e6)
+    for (formula, ρ) in (("Si", 2.33), ("SiO2", 2.2), ("Au", 19.3))
+        r = calculate_single_material_properties(formula, [5.0, 8.0, 20.0], ρ)
+        λ = r.wavelength .* 1e-10
+        pref =
+            λ .^ 2 ./ (2π) .* XRayLabTool.THOMSON_SCATTERING_LENGTH .*
+            (ρ * 1e6 * XRayLabTool.AVOGADRO / r.molecular_weight)
+        @test r.dispersion ≈ pref .* r.f1 rtol = 1e-9
+        @test r.absorption ≈ pref .* r.f2 rtol = 1e-9
+    end
+end
+
+@testset "Fused PCHIP evaluation is bit-identical to per-point interpolator calls" begin
+    X = XRayLabTool
+    function naive(E_eV, λ_m, ρ, mw, data)
+        n = length(E_eV)
+        delta, beta, f1t, f2t = (zeros(n) for _ in 1:4)
+        cf = X.SCATTERING_PREFACTOR * ρ / mw
+        for (count, i1, i2) in data
+            ecf = cf * count  # same association as the implementation
+            for i in 1:n
+                a = i1(E_eV[i])
+                b = i2(E_eV[i])
+                w = λ_m[i]^2
+                delta[i] += w * ecf * a
+                beta[i] += w * ecf * b
+                f1t[i] += count * a
+                f2t[i] += count * b
+            end
+        end
+        return delta, beta, f1t, f2t
+    end
+    rng_vals = [(0.6180339887 * k) % 1.0 for k in 1:400]  # deterministic, no RNG state
+    datadir = joinpath(pkgdir(X), "src", "AtomicScatteringFactor")
+    elements = [uppercasefirst(splitext(f)[1]) for f in readdir(datadir) if endswith(f, ".nff")]
+    @test length(elements) == 92
+    for sym in elements
+        i1, i2 = X.load_element_interpolators(sym)
+        nodes = filter(x -> 30.0 <= x <= 30000.0, i1.xs)
+        energy_sets = (
+            sort(30.0 .+ rng_vals .* 29970.0),               # sorted, dense
+            sort([30.0, 30000.0, nodes...]),                 # exact endpoints and grid nodes
+            sort(repeat(30.0 .+ rng_vals[1:40] .* 29970.0, 3)), # duplicates
+            30.0 .+ rng_vals .* 29970.0,                     # unsorted (walk must re-locate)
+            [8000.0],                                        # single point
+            [30.0, 15000.0, 30000.0],                        # sparse: exceeds the linear-walk cap
+            [10.0, first(i1.xs), 30000.0, 40000.0],          # outside the grid: fallback gives NaN
+        )
+        for E in energy_sets
+            λ = X.HC_OVER_ELECTRON_CHARGE_keV ./ (E ./ 1000)
+            data = X.ElementInterpolatorData[(2.0, i1, i2), (1.5, i1, i2)]
+            out = ntuple(_ -> zeros(length(E)), 4)
+            X.accumulate_optical_coefficients!(E, λ, 2.3, 50.0, data, out...)
+            @test isequal(out, naive(E, λ, 2.3, 50.0, data))  # isequal: also distinguishes -0.0 from 0.0
+        end
+    end
+    # Interpolators on different grids must not share the first one's interval
+    i1, i2 = X.load_element_interpolators("Si")
+    itp_ctor = parentmodule(typeof(i1)).Interpolator
+    i2_coarse = itp_ctor(i2.xs[1:2:end], i2.ys[1:2:end])
+    E = sort(30.0 .+ rng_vals .* 29970.0)
+    λ = X.HC_OVER_ELECTRON_CHARGE_keV ./ (E ./ 1000)
+    data = X.ElementInterpolatorData[(1.0, i1, i2_coarse)]
+    out = ntuple(_ -> zeros(length(E)), 4)
+    X.accumulate_optical_coefficients!(E, λ, 2.3, 50.0, data, out...)
+    @test isequal(out, naive(E, λ, 2.3, 50.0, data))
+
+    # _hermite_pair itself equals the two interpolator calls, endpoints included
+    for sym in ("H", "Si", "Au", "U")
+        a, b = X.load_element_interpolators(sym)
+        xs = a.xs
+        pts = vcat(first(xs), last(xs), xs[2:50:(end - 1)], 30.0 .+ rng_vals .* 29970.0)
+        for x in pts
+            j = clamp(searchsortedlast(xs, x), firstindex(xs), lastindex(xs) - 1)
+            @test isequal(X._hermite_pair(a, b, x, j), (a(x), b(x)))
+        end
+    end
+
+    # Empty input is a no-op rather than a BoundsError
+    i1, i2 = X.load_element_interpolators("Si")
+    z = Float64[]
+    @test X.accumulate_optical_coefficients!(
+        z, z, 1.0, 1.0, X.ElementInterpolatorData[(1.0, i1, i2)], z, z, z, z,
+    ) === nothing
+end
+
+@testset "Unknown elements are ArgumentErrors; corrupt data files are not" begin
+    X = XRayLabTool
+    # Expected user-facing failures keep their type
+    @test_throws ArgumentError X.atomic_number_and_mass("Xx")
+    @test_throws ArgumentError X.atomic_number_and_mass("si")  # symbols are case-sensitive
+    @test_throws ArgumentError X.load_element_interpolators("Np")  # known element, no data file
+    @test_throws ArgumentError X._validate_formulas(["Np"])
+
+    # An existing but unreadable/corrupt table is an internal error, not an invalid formula
+    mktempdir() do dir
+        write_nff(name, body) = (path = joinpath(dir, name); write(path, body); path)
+        header = "Energy(eV), f1, f2\n"
+        good = write_nff("good.nff", header * "10.0,1.0,0.1\n20.0,2.0,0.2\n30.0,3.0,0.3\n")
+        i1, i2, n = X._read_nff_interpolators(good, "Zz")
+        @test n == 3 && i1(20.0) == 2.0 && i2(20.0) == 0.2
+
+        corrupt = Dict(
+            "non-numeric field" => header * "10.0,abc,0.1\n20.0,2.0,0.2\n",
+            "short row" => header * "10.0,1.0\n20.0,2.0,0.2\n",
+            "non-increasing energies" => header * "20.0,1.0,0.1\n10.0,2.0,0.2\n",
+        )
+        for (label, body) in corrupt
+            path = write_nff(replace(label, ' ' => '_') * ".nff", body)
+            err = try
+                X._read_nff_interpolators(path, "Zz")
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException && !(err isa ArgumentError)
+            @test occursin("Zz", err.msg) && occursin(path, err.msg)
+        end
     end
 end

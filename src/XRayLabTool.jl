@@ -44,8 +44,8 @@ The functions return XRayResult struct(s) containing:
 7. X-ray wavelength in Å (`wavelength`)
 8. Dispersion coefficient (`dispersion`)
 9. Absorption coefficient (`absorption`)
-10. Real part of atomic scattering factor (`f1`)
-11. Imaginary part of atomic scattering factor (`f2`)
+10. Real part of the scattering factor, summed over the formula unit (`f1`)
+11. Imaginary part of the scattering factor, summed over the formula unit (`f2`)
 12. Critical angle in degrees (`critical_angle`)
 13. Attenuation length in cm (`attenuation_length`)
 14. Real part of scattering length density in Å⁻² (`real_sld`)
@@ -69,6 +69,10 @@ const PCHIPInterp = Interpolator{Vector{Float64}, Vector{Float64}, Vector{Float6
 # Concrete element data tuple: (count, f1_interpolator, f2_interpolator)
 const ElementInterpolatorData = Tuple{Float64, PCHIPInterp, PCHIPInterp}
 
+# Deepest parenthesis nesting accepted by the formula parser; real formulas nest a few levels.
+# Bounds the recursion so a hostile string raises ArgumentError instead of overflowing the stack.
+const MAX_FORMULA_NESTING = 64
+
 # =====================================================================================
 # DATA STRUCTURES
 # =====================================================================================
@@ -91,8 +95,8 @@ struct XRayResult
     wavelength::Vector{Float64}          # X-ray wavelength (Å)
     dispersion::Vector{Float64}          # Dispersion coefficient
     absorption::Vector{Float64}          # Absorption coefficient
-    f1::Vector{Float64}                  # Real part of atomic scattering factor
-    f2::Vector{Float64}                  # Imaginary part of atomic scattering factor
+    f1::Vector{Float64}                  # Real part of scattering factor (formula-unit sum)
+    f2::Vector{Float64}                  # Imaginary part of scattering factor (formula-unit sum)
     critical_angle::Vector{Float64}      # Critical angle (degrees)
     attenuation_length::Vector{Float64}  # Attenuation length (cm)
     real_sld::Vector{Float64}            # Real part of SLD (Å⁻²)
@@ -116,9 +120,11 @@ const _LEGACY_FIELD_MAP = Dict{Symbol, Symbol}(
     :imSLD => :imag_sld,
 )
 
+# Real fields take the `hasfield` branch, which constant-folds for literal names and keeps
+# `result.field` type-stable; only legacy names consult the map.
 function Base.getproperty(result::XRayResult, name::Symbol)
-    mapped = get(_LEGACY_FIELD_MAP, name, name)
-    return getfield(result, mapped)
+    hasfield(XRayResult, name) && return getfield(result, name)
+    return getfield(result, get(_LEGACY_FIELD_MAP, name, name))
 end
 
 function Base.propertynames(::XRayResult, private::Bool = false)
@@ -148,7 +154,7 @@ const KEV_TO_EV = 1000.0
 const M_TO_ANGSTROM = 1e10
 const M_TO_CM = 1e2
 const NS_PER_MS = 1e6
-const ELECTRON_DENSITY_FACTOR = AVOGADRO * 1e6 / 1e30  # Nₐ × (cm³→m³) / (m³→ų): converts (ρ/M)·Z to electrons/ų
+const ELECTRON_DENSITY_FACTOR = AVOGADRO * 1e6 / 1e30  # Nₐ × (cm³→m³) / (m³→Å³): converts (ρ/M)·Z to electrons/Å³
 const SLD_FACTOR = 2 * π / 1e20                          # Å⁻² conversion
 
 # Deprecation bridges for backward compatibility
@@ -166,15 +172,13 @@ Caches for performance optimization:
 - INTERPOLATOR_CACHE: Stores pre-built PCHIP interpolator pairs (f1, f2) per element
 
 Both caches are protected by locks for thread safety during parallel processing.
+Every read and write goes through the lock: a lock-free read would race with
+`clear_caches!` and with concurrent cache population from other tasks.
 """
 const ATOMIC_DATA_CACHE = Dict{String, Tuple{Int, Float64}}()
 const ATOMIC_DATA_LOCK = ReentrantLock()
 const INTERPOLATOR_CACHE = Dict{String, Tuple{PCHIPInterp, PCHIPInterp}}()
 const INTERPOLATOR_LOCK = ReentrantLock()
-# When true, caches are fully populated and can be read without locks.
-# Set to true after _validate_formulas completes (batch path only); reset by clear_caches!.
-# Single-material calls always use the locked read path since they don't call _validate_formulas.
-const CACHES_FROZEN = Threads.Atomic{Bool}(false)
 
 # =====================================================================================
 # VALIDATION
@@ -200,17 +204,40 @@ end
     end
 end
 
+"""Validate that the molecular weight implied by the element counts is usable.
+
+Counts that are subnormal or huge push the molecular weight (or the density prefactor
+derived from it) out of the representable range and would otherwise yield Inf results.
+"""
+@inline function _validate_molecular_weight(molecular_weight::Float64, formula::String)
+    if !(
+        isfinite(molecular_weight) &&
+        molecular_weight > 0 &&
+        isfinite(SCATTERING_PREFACTOR / molecular_weight)
+    )
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: element counts in \"$formula\" give a molecular weight ($molecular_weight g/mol) outside the representable range",
+            ),
+        )
+    end
+end
+
 """Validate all formulas upfront. Throws ArgumentError listing all invalid formulas."""
 function _validate_formulas(formulaList::Vector{String})
     invalid = String[]
     for formula in formulaList
         try
-            symbols, _ = parse_formula(formula)
-            for sym in symbols
-                atomic_number_and_mass(sym)
+            symbols, counts = parse_formula(formula)
+            molecular_weight = 0.0
+            for (sym, count) in zip(symbols, counts)
+                molecular_weight += count * atomic_number_and_mass(sym)[2]
                 load_element_interpolators(sym)
             end
-        catch
+            _validate_molecular_weight(molecular_weight, formula)
+        catch e
+            # Only expected failures mean "invalid formula"; surface real internal errors
+            e isa ArgumentError || rethrow()
             push!(invalid, formula)
         end
     end
@@ -224,7 +251,6 @@ function _validate_formulas(formulaList::Vector{String})
             ),
         )
     end
-    CACHES_FROZEN[] = true
     @debug "All formulas validated" _group = :validation formula_count = length(formulaList)
 end
 
@@ -248,16 +274,6 @@ Uses caching to avoid repeated lookups of the same element.
 - 'ArgumentError': If element symbol is not found in periodic table
 """
 function atomic_number_and_mass(element_symbol::String)
-    # Lock-free read when caches are frozen (after _validate_formulas)
-    if CACHES_FROZEN[]
-        cached = get(ATOMIC_DATA_CACHE, element_symbol, nothing)
-        if cached !== nothing
-            @debug "Atomic data cache hit (frozen)" _group = :cache element = element_symbol
-            return cached
-        end
-    end
-
-    # Locked read — required during cache population
     cached = lock(ATOMIC_DATA_LOCK) do
         get(ATOMIC_DATA_CACHE, element_symbol, nothing)
     end
@@ -267,16 +283,15 @@ function atomic_number_and_mass(element_symbol::String)
         return cached
     end
 
-    # Search periodic table for element
-    local atomic_number::Int
-    local atomic_mass::Float64
-    try
-        elem = chem_elements[Symbol(element_symbol)]
-        atomic_number = Int(elem.atomic_number)
-        atomic_mass = Float64(ustrip(elem.atomic_weight))
-    catch
+    # Search periodic table for element; only a missing key means "unknown element"
+    elem = try
+        chem_elements[Symbol(element_symbol)]
+    catch e
+        e isa KeyError || rethrow()
         throw(ArgumentError("Element $element_symbol not found in periodic table"))
     end
+    atomic_number = Int(elem.atomic_number)
+    atomic_mass = Float64(ustrip(elem.atomic_weight))
 
     result = (atomic_number, atomic_mass)
 
@@ -302,7 +317,7 @@ Parse a chemical formula string into element symbols and their counts.
 - 'Tuple{Vector{String}, Vector{Float64}}': (element_symbols, element_counts)
 
 # Examples
-'''julia
+```julia
 symbols, counts = parse_formula("SiO2")
 # symbols = ["Si", "O"], counts = [1.0, 2.0]
 
@@ -314,10 +329,10 @@ symbols, counts = parse_formula("Ca(OH)2")
 
 symbols, counts = parse_formula("Ca3(PO4)2")
 # symbols = ["Ca", "P", "O"], counts = [3.0, 2.0, 8.0]
-'''
+```
 
 # Throws
-- 'ArgumentError': If formula string is invalid or empty
+- 'ArgumentError': If the formula string is invalid or empty, an element count is not positive and finite, or parentheses are nested deeper than `MAX_FORMULA_NESTING`
 """
 function parse_formula(formulaStr::String)
     @debug "Parsing formula" _group = :parser input = formulaStr
@@ -343,6 +358,14 @@ function parse_formula(formulaStr::String)
         throw(ArgumentError("Invalid chemical formula: $formulaStr"))
     end
 
+    if any(c -> !(isfinite(c) && c > 0), counts)
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: element counts must be positive and finite in \"$formulaStr\"",
+            ),
+        )
+    end
+
     @debug "Formula parsed" _group = :parser formula = formulaStr elements =
         join(elements, ",") counts = join(counts, ",")
     return elements, counts
@@ -354,7 +377,14 @@ end
 Recursive descent parser for chemical formula groups. Handles nested parentheses.
 Returns (element_symbols, element_counts, next_position).
 """
-function _parse_group(s::String, pos::Int)
+function _parse_group(s::String, pos::Int, depth::Int = 0)
+    if depth > MAX_FORMULA_NESTING
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: parentheses nested deeper than $MAX_FORMULA_NESTING levels",
+            ),
+        )
+    end
     elements = String[]
     counts = Float64[]
     sizehint!(elements, 4)
@@ -365,7 +395,7 @@ function _parse_group(s::String, pos::Int)
 
         if c == '('
             # Recurse into sub-group
-            sub_elems, sub_counts, pos = _parse_group(s, pos + 1)
+            sub_elems, sub_counts, pos = _parse_group(s, pos + 1, depth + 1)
 
             if pos > lastindex(s) || s[pos] != ')'
                 throw(
@@ -444,6 +474,36 @@ function _parse_number(s::String, pos::Int)
 end
 
 """
+    _read_nff_interpolators(file, element_symbol) -> (f1_interpolator, f2_interpolator, n_points)
+
+Read an `.nff` table (header line, then `energy_eV,f1,f2` rows) and build the PCHIP
+interpolators. A failure here means the bundled data file is unreadable or corrupt, not that
+the user supplied a bad formula, so it raises `ErrorException` (never `ArgumentError`, which
+`_validate_formulas` would report as an invalid formula).
+"""
+function _read_nff_interpolators(file::String, element_symbol::String)
+    try
+        lines = readlines(file)
+        n = length(lines) - 1  # Skip header
+        energy = Vector{Float64}(undef, n)
+        f1_data = Vector{Float64}(undef, n)
+        f2_data = Vector{Float64}(undef, n)
+        for j in 1:n
+            parts = split(lines[j + 1], ',')
+            energy[j] = parse(Float64, parts[1])
+            f1_data[j] = parse(Float64, parts[2])
+            f2_data[j] = parse(Float64, parts[3])
+        end
+        return Interpolator(energy, f1_data), Interpolator(energy, f2_data), n
+    catch e
+        error(
+            "Scattering-factor data for element $element_symbol is unreadable or corrupt ($file): " *
+            sprint(showerror, e),
+        )
+    end
+end
+
+"""
     load_element_interpolators(element_symbol::String) -> (PCHIPInterp, PCHIPInterp)
 
 Load and cache PCHIP interpolators for an element's scattering factors.
@@ -458,20 +518,10 @@ Returns cached interpolator pair if available, otherwise loads the element's
 - `Tuple{PCHIPInterp, PCHIPInterp}`: (f1_interpolator, f2_interpolator)
 
 # Throws
-- `ArgumentError`: If element data file cannot be found
+- `ArgumentError`: If the element has no data file (unknown element)
+- `ErrorException`: If the data file exists but cannot be read or parsed
 """
 function load_element_interpolators(element_symbol::String)
-    # Lock-free read when caches are frozen (after _validate_formulas)
-    if CACHES_FROZEN[]
-        cached = get(INTERPOLATOR_CACHE, element_symbol, nothing)
-        if cached !== nothing
-            @debug "Interpolator cache hit (frozen)" _group = :cache element =
-                element_symbol
-            return cached
-        end
-    end
-
-    # Locked read — required during cache population
     cached = lock(INTERPOLATOR_LOCK) do
         get(INTERPOLATOR_CACHE, element_symbol, nothing)
     end
@@ -490,30 +540,21 @@ function load_element_interpolators(element_symbol::String)
     file = normpath(joinpath(@__DIR__, "AtomicScatteringFactor", fname))
     @debug "Resolving .nff file" _group = :io element = element_symbol path = file
 
-    # Load data file and build interpolators (outside lock)
-    local itp_f1::PCHIPInterp
-    local itp_f2::PCHIPInterp
-    t_io = time_ns()
-    try
-        lines = readlines(file)
-        n = length(lines) - 1  # Skip header
-        energy = Vector{Float64}(undef, n)
-        f1_data = Vector{Float64}(undef, n)
-        f2_data = Vector{Float64}(undef, n)
-        for j in 1:n
-            parts = split(lines[j + 1], ',')
-            energy[j] = parse(Float64, parts[1])
-            f1_data[j] = parse(Float64, parts[2])
-            f2_data[j] = parse(Float64, parts[3])
-        end
-        itp_f1 = Interpolator(energy, f1_data)
-        itp_f2 = Interpolator(energy, f2_data)
-        elapsed_io_ms = (time_ns() - t_io) / NS_PER_MS
-        @debug "Loaded .nff file" _group = :io element = element_symbol data_points = n elapsed_ms =
-            round(elapsed_io_ms; digits = 3)
-    catch e
-        throw(ArgumentError("Element $element_symbol is NOT in the table list: $e"))
+    # A missing data file is the expected "unknown element" case
+    if !isfile(file)
+        throw(
+            ArgumentError(
+                "Element $element_symbol is NOT in the table list (no file $fname)",
+            ),
+        )
     end
+
+    # Load data file and build interpolators (outside lock)
+    t_io = time_ns()
+    itp_f1, itp_f2, n = _read_nff_interpolators(file, element_symbol)
+    elapsed_io_ms = (time_ns() - t_io) / NS_PER_MS
+    @debug "Loaded .nff file" _group = :io element = element_symbol data_points = n elapsed_ms =
+        round(elapsed_io_ms; digits = 3)
 
     result = (itp_f1, itp_f2)
 
@@ -524,6 +565,36 @@ function load_element_interpolators(element_symbol::String)
     @debug "Interpolator cache miss → stored" _group = :cache element = element_symbol
 
     return result
+end
+
+"""
+    _hermite_pair(itp1, itp2, x, j) -> (f1, f2)
+
+Evaluate two PCHIP interpolators that share one grid at `x`, which lies in interval `j`
+(`xs[j] <= x <= xs[j+1]`). Same expressions, in the same order, as PCHIPInterpolation's own
+evaluation, so the result is bit-identical to `(itp1(x), itp2(x))`; the basis terms are
+computed once instead of twice.
+"""
+@inline function _hermite_pair(itp1::PCHIPInterp, itp2::PCHIPInterp, x::Float64, j::Int)
+    xs = itp1.xs
+    x1 = xs[j]
+    x2 = xs[j + 1]
+    h = x2 - x1
+    t1 = (x2 - x) / h
+    t2 = (x - x1) / h
+    ϕ1 = 3t1^2 - 2t1^3
+    ϕ2 = 3t2^2 - 2t2^3
+    ψ1 = t1^3 - t1^2
+    ψ2 = t2^3 - t2^2
+
+    ys1 = itp1.ys
+    ds1 = itp1.ds
+    f1 = ys1[j] * ϕ1 + ys1[j + 1] * ϕ2 - ds1[j] * h * ψ1 + ds1[j + 1] * h * ψ2
+
+    ys2 = itp2.ys
+    ds2 = itp2.ds
+    f2 = ys2[j] * ϕ1 + ys2[j + 1] * ϕ2 - ds2[j] * h * ψ1 + ds2[j + 1] * h * ψ2
+    return f1, f2
 end
 
 """
@@ -547,13 +618,13 @@ scattering factors for a material based on its elemental composition.
 
 # Mathematical Background
 The optical coefficients delta and beta are calculated using:
-- δ = (λ²/2π) × rₑ × ρ × Nₐ × (Σᵢ nᵢ × f1ᵢ) / M
-- β = (λ²/2π) × rₑ × ρ × Nₐ × (Σᵢ nᵢ × f2ᵢ) / M
+- δ = (λ²/2π) × rₑ × (10⁶·ρ) × Nₐ × (Σᵢ nᵢ × f1ᵢ) / M
+- β = (λ²/2π) × rₑ × (10⁶·ρ) × Nₐ × (Σᵢ nᵢ × f2ᵢ) / M
 
 Where:
 - λ: X-ray wavelength in meters
 - rₑ: Thomson scattering length
-- ρ: Mass density
+- ρ: Mass density in g/cm³ (the factor 10⁶ converts to g/m³ for λ in metres)
 - Nₐ: Avogadro's number
 - nᵢ: Number of atoms of element i
 - f1ᵢ, f2ᵢ: Atomic scattering factors for element i
@@ -571,6 +642,7 @@ function accumulate_optical_coefficients!(
     f2_total::Vector{Float64},
 )
     n_energies = length(energies_eV)
+    n_energies == 0 && return nothing
 
     # Pre-compute density-dependent factor for efficiency
     # Factor includes: (λ²/2π) × rₑ × ρ × Nₐ / M
@@ -581,11 +653,33 @@ function accumulate_optical_coefficients!(
         # Element-specific contribution factor
         element_contribution_factor = common_factor * count
 
-        # Vectorized calculation across all energies
+        # f1 and f2 of an element share one energy grid, so the interval is located once per
+        # energy; energies arrive sorted, so a monotone walk replaces the binary search.
+        xs = itp1.xs
+        shared_grid = xs === itp2.xs
+        x_lo = first(xs)
+        x_hi = last(xs)
+        last_interval = lastindex(xs) - 1
+        j = firstindex(xs)
+
         @inbounds for i in 1:n_energies
-            # Interpolate scattering factors at this energy
-            f1_val = itp1(energies_eV[i])
-            f2_val = itp2(energies_eV[i])
+            x = energies_eV[i]
+            if shared_grid && x_lo <= x <= x_hi
+                # Binary-search when moving backwards (unsorted input) or more than 8 nodes
+                # ahead (sparse energies, or the first point); otherwise the walk below takes
+                # at most 8 steps. Both routes select the same interval.
+                if x < xs[j] || x >= xs[min(j + 8, last_interval + 1)]
+                    j = clamp(searchsortedlast(xs, x), firstindex(xs), last_interval)
+                end
+                while j < last_interval && x >= xs[j + 1]
+                    j += 1
+                end
+                f1_val, f2_val = _hermite_pair(itp1, itp2, x, j)
+            else
+                # Outside the tabulated range (or distinct grids): defer to the interpolators
+                f1_val = itp1(x)
+                f2_val = itp2(x)
+            end
 
             # Calculate wavelength-dependent factors
             wave_sq = wavelengths_m[i]^2
@@ -696,7 +790,7 @@ function _calculate_xray_properties_impl(
         round(elapsed_validate_ms; digits = 3)
 
     # ==================================================================================
-    # PARALLEL CALCULATION (lock-free: Vector indexed writes, caches are read-only)
+    # PARALLEL CALCULATION (each task writes its own results_vec slot; cache reads take a short lock)
     # ==================================================================================
 
     n_formulas = length(formulaList)
@@ -744,10 +838,8 @@ function _calculate_single_material_impl(
 
     t_start = time_ns()
 
-    # Sort energies for consistent output (skip if already sorted — e.g., from batch path)
-    if !issorted(energies_keV)
-        energies_keV = sort(energies_keV)
-    end
+    # Sorted private copy: the result must not alias the caller's vector (or sibling results)
+    energies_keV = issorted(energies_keV) ? copy(energies_keV) : sort(energies_keV)
 
     @debug "Single-material calculation started" _group = :computation formula = formulaStr density =
         massDensity energy_count = length(energies_keV)
@@ -775,6 +867,8 @@ function _calculate_single_material_impl(
         molecular_weight += element_counts[i] * atomic_mass
         number_of_electrons += atomic_number * element_counts[i]
     end
+
+    _validate_molecular_weight(molecular_weight, formulaStr)
 
     @debug "Molecular properties computed" _group = :computation formula = formulaStr MW =
         round(molecular_weight; digits = 3) electrons = number_of_electrons element_count =
@@ -839,16 +933,17 @@ function _calculate_single_material_impl(
         _compute_derived_quantities(wavelengths_m, delta, beta)
 
     @debug "Derived quantities computed" _group = :computation formula = formulaStr electron_density =
-        () -> round(electron_density; sigdigits = 6) critical_angle_range =
-        () ->
-            "($(round(minimum(critical_angle); sigdigits=4)), $(round(maximum(critical_angle); sigdigits=4)))" attenuation_length_range =
-        () ->
-            "($(round(minimum(attenuation_length); sigdigits=4)), $(round(maximum(attenuation_length); sigdigits=4)))"
+        round(electron_density; sigdigits = 6) critical_angle_range = (
+        round(minimum(critical_angle); sigdigits = 4),
+        round(maximum(critical_angle); sigdigits = 4),
+    ) attenuation_length_range = (
+        round(minimum(attenuation_length); sigdigits = 4),
+        round(maximum(attenuation_length); sigdigits = 4),
+    )
 
     @debug "Result summary" _group = :computation formula = formulaStr delta_range =
-        () -> "($(minimum(delta)), $(maximum(delta)))" beta_range =
-        () -> "($(minimum(beta)), $(maximum(beta)))" sld_range =
-        () -> "($(minimum(re_sld)), $(maximum(re_sld)))"
+        (minimum(delta), maximum(delta)) beta_range = (minimum(beta), maximum(beta)) sld_range =
+        (minimum(re_sld), maximum(re_sld))
 
     elapsed_ms = (time_ns() - t_start) / NS_PER_MS
     @debug "Material calculation complete" _group = :computation formula = formulaStr MW =
@@ -951,27 +1046,23 @@ end
 
 Clear all cached data to free memory.
 
-This function clears both the atomic data cache and the f1f2 table cache.
+This function clears both the atomic data cache and the scattering-factor interpolator cache.
 Useful for memory management in long-running applications or when processing
 many different materials.
 
 # Examples
-'''julia
+```julia
 # After processing many materials, clear caches to free memory
-clear_caches!()
-'''
+XRayLabTool.clear_caches!()  # not exported
+```
 """
 function clear_caches!()
-    # Empty caches under lock BEFORE clearing the frozen flag.
-    # This prevents a race where another thread reads CACHES_FROZEN==true
-    # and then does a lock-free get() on a Dict being emptied concurrently.
     lock(ATOMIC_DATA_LOCK) do
         empty!(ATOMIC_DATA_CACHE)
     end
     lock(INTERPOLATOR_LOCK) do
         empty!(INTERPOLATOR_CACHE)
     end
-    CACHES_FROZEN[] = false
     @debug "Caches cleared" _group = :cache
 end
 
@@ -1020,5 +1111,12 @@ function SubRefrac(formulaStr::String, energies_keV::Vector{Float64}, massDensit
     )
     return _calculate_single_material_impl(formulaStr, energies_keV, massDensity)
 end
+
+# Cache compiled specializations of the public entry points in the package image, cutting
+# first-call latency. Plain `precompile` (no workload) so no cache state is serialized.
+precompile(calculate_single_material_properties, (String, Vector{Float64}, Float64))
+precompile(calculate_xray_properties, (Vector{String}, Vector{Float64}, Vector{Float64}))
+precompile(Refrac, (Vector{String}, Vector{Float64}, Vector{Float64}))
+precompile(SubRefrac, (String, Vector{Float64}, Float64))
 
 end  # module

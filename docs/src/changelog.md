@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhering to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Data race on the element caches: the lock-free `CACHES_FROZEN` read path raced with `clear_caches!` and with concurrent cache population, causing crashes or spurious "Invalid formulas" errors under multithreaded use. All cache reads now take the lock; `CACHES_FROZEN` is removed
+- `_validate_formulas` no longer reports unexpected internal errors as invalid formulas; only `ArgumentError`s are collected
+- Formulas with a zero count (`H0`, `(SiO2)0`, `SiO0`) now raise `ArgumentError` instead of silently dropping the element or returning NaN results
+- `XRayResult.energy` is now a private copy; it no longer aliases the caller's vector or other results from the same batch
+- `@debug` output for derived quantities now shows values instead of `#NN (generic function ...)`
+- Non-finite or unusable element counts now raise `ArgumentError` instead of returning NaN/Inf properties: a group multiplier that overflows to `Inf` (e.g. a 200-digit count inside a 200-digit group multiplier), and counts so small or large that the molecular weight or the density prefactor leaves the representable range (e.g. `H0.` followed by 319 zeros and a `1`, which gave `dispersion = [Inf]`)
+- `atomic_number_and_mass` converts only a missing key (`KeyError`) into the "not found in periodic table" `ArgumentError`, and `load_element_interpolators` reports an unknown element by checking for the data file instead of catching every exception. An existing but unreadable or corrupt `.nff` table now raises an `ErrorException` naming the element and file (it was reported as "NOT in the table list", and an `ArgumentError` would be reported by `_validate_formulas` as an invalid formula)
+- Deeply nested parentheses (more than 64 levels) now raise `ArgumentError`; a ~100k-deep formula previously overflowed the stack, and since `_validate_formulas` stopped swallowing non-`ArgumentError` exceptions it would have escaped as a `StackOverflowError`
+- `result.<field>` access is type-stable again (the legacy-name lookup no longer sits on the hot path); legacy names such as `result.Energy` still work
+- Docs: δ/β equations now show the 10⁶ g/cm³→g/m³ factor, the constants table matches the code, f₁/f₂ units are per formula unit, the quick-start no longer indexes batch results by formula string, and `ų` typos are corrected to `Å³`
+
+### Performance
+- Evaluate f₁ and f₂ of each element together: the energy interval is located once (a short forward walk over the sorted energies, with a binary-search relocation for the first point, sparse energies and out-of-order input) and the Hermite basis terms are shared. Results are bit-identical to the previous per-point `itp(x)` evaluation (verified for all 92 elements by `test/test_edge_cases.jl`). Single material, 1k energies: 70 → 24 µs; 8-formula batch, 1k energies: 706 → 231 µs (1 thread)
+- `precompile` statements for the public entry points cut the first batch call from ~30-50 ms to ~1 ms
+- `accumulate_optical_coefficients!` returns immediately for empty input
+
+### Tests
+- Added a closed-form δ/β check (rtol 1e-9); the previous absolute tolerance (1e-6) let a 4% error in the optical coefficients pass
+
 ## [0.7.1] - 2026-03-28
 
 ### Fixed

@@ -23,7 +23,7 @@ result = calculate_single_material_properties("SiO2", collect(5.0:1.0:20.0), 2.2
 result.formula              # "SiO2"
 result.molecular_weight     # 60.08 g/mol
 result.number_of_electrons  # 30.0
-result.electron_density     # electrons/ų
+result.electron_density     # electrons/Å³
 
 # Access energy-dependent vector properties
 result.energy               # [5.0, 6.0, ..., 20.0] keV
