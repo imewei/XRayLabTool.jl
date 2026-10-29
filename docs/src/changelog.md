@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adheri
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-29
+
 ### Fixed
 - Data race on the element caches: the lock-free `CACHES_FROZEN` read path raced with `clear_caches!` and with concurrent cache population, causing crashes or spurious "Invalid formulas" errors under multithreaded use. All cache reads now take the lock; `CACHES_FROZEN` is removed
 - `_validate_formulas` no longer reports unexpected internal errors as invalid formulas; only `ArgumentError`s are collected
