@@ -774,3 +774,51 @@ end
         @test r.absorption ≈ pref .* r.f2 rtol = 1e-9
     end
 end
+
+@testset "Fused PCHIP evaluation is bit-identical to per-point interpolator calls" begin
+    X = XRayLabTool
+    function naive(E_eV, λ_m, ρ, mw, data)
+        n = length(E_eV)
+        delta, beta, f1t, f2t = (zeros(n) for _ in 1:4)
+        cf = X.SCATTERING_PREFACTOR * ρ / mw
+        for (count, i1, i2) in data
+            ecf = cf * count  # same association as the implementation
+            for i in 1:n
+                a = i1(E_eV[i])
+                b = i2(E_eV[i])
+                w = λ_m[i]^2
+                delta[i] += w * ecf * a
+                beta[i] += w * ecf * b
+                f1t[i] += count * a
+                f2t[i] += count * b
+            end
+        end
+        return delta, beta, f1t, f2t
+    end
+    rng_vals = [(0.6180339887 * k) % 1.0 for k in 1:400]  # deterministic, no RNG state
+    for sym in ("H", "Si", "Au", "U")
+        i1, i2 = X.load_element_interpolators(sym)
+        nodes = filter(x -> 30.0 <= x <= 30000.0, i1.xs)
+        energy_sets = (
+            sort(30.0 .+ rng_vals .* 29970.0),               # sorted, dense
+            sort([30.0, 30000.0, nodes...]),                 # exact endpoints and grid nodes
+            sort(repeat(30.0 .+ rng_vals[1:40] .* 29970.0, 3)), # duplicates
+            30.0 .+ rng_vals .* 29970.0,                     # unsorted (walk must re-locate)
+            [8000.0],                                        # single point
+            [30.0, 15000.0, 30000.0],                        # sparse: exceeds the linear-walk cap
+        )
+        for E in energy_sets
+            λ = X.HC_OVER_ELECTRON_CHARGE_keV ./ (E ./ 1000)
+            data = X.ElementInterpolatorData[(2.0, i1, i2), (1.5, i1, i2)]
+            out = ntuple(_ -> zeros(length(E)), 4)
+            X.accumulate_optical_coefficients!(E, λ, 2.3, 50.0, data, out...)
+            @test isequal(out, naive(E, λ, 2.3, 50.0, data))  # isequal: also distinguishes -0.0 from 0.0
+        end
+    end
+    # Empty input is a no-op rather than a BoundsError
+    i1, i2 = X.load_element_interpolators("Si")
+    z = Float64[]
+    @test X.accumulate_optical_coefficients!(
+        z, z, 1.0, 1.0, X.ElementInterpolatorData[(1.0, i1, i2)], z, z, z, z,
+    ) === nothing
+end

@@ -515,6 +515,36 @@ function load_element_interpolators(element_symbol::String)
 end
 
 """
+    _hermite_pair(itp1, itp2, x, j) -> (f1, f2)
+
+Evaluate two PCHIP interpolators that share one grid at `x`, which lies in interval `j`
+(`xs[j] <= x <= xs[j+1]`). Same expressions, in the same order, as PCHIPInterpolation's own
+evaluation, so the result is bit-identical to `(itp1(x), itp2(x))`; the basis terms are
+computed once instead of twice.
+"""
+@inline function _hermite_pair(itp1::PCHIPInterp, itp2::PCHIPInterp, x::Float64, j::Int)
+    xs = itp1.xs
+    x1 = xs[j]
+    x2 = xs[j + 1]
+    h = x2 - x1
+    t1 = (x2 - x) / h
+    t2 = (x - x1) / h
+    ϕ1 = 3t1^2 - 2t1^3
+    ϕ2 = 3t2^2 - 2t2^3
+    ψ1 = t1^3 - t1^2
+    ψ2 = t2^3 - t2^2
+
+    ys1 = itp1.ys
+    ds1 = itp1.ds
+    f1 = ys1[j] * ϕ1 + ys1[j + 1] * ϕ2 - ds1[j] * h * ψ1 + ds1[j + 1] * h * ψ2
+
+    ys2 = itp2.ys
+    ds2 = itp2.ds
+    f2 = ys2[j] * ϕ1 + ys2[j + 1] * ϕ2 - ds2[j] * h * ψ1 + ds2[j + 1] * h * ψ2
+    return f1, f2
+end
+
+"""
     accumulate_optical_coefficients!(...)
 
 Vectorized calculation of X-ray scattering factors and optical properties.
@@ -559,6 +589,7 @@ function accumulate_optical_coefficients!(
     f2_total::Vector{Float64},
 )
     n_energies = length(energies_eV)
+    n_energies == 0 && return nothing
 
     # Pre-compute density-dependent factor for efficiency
     # Factor includes: (λ²/2π) × rₑ × ρ × Nₐ / M
@@ -569,11 +600,39 @@ function accumulate_optical_coefficients!(
         # Element-specific contribution factor
         element_contribution_factor = common_factor * count
 
-        # Vectorized calculation across all energies
+        # f1 and f2 of an element share one energy grid, so the interval is located once per
+        # energy; energies arrive sorted, so a monotone walk replaces the binary search.
+        xs = itp1.xs
+        shared_grid = xs === itp2.xs
+        x_lo = first(xs)
+        x_hi = last(xs)
+        last_interval = lastindex(xs) - 1
+        # Seed the walk with one binary search so a lone high-energy point is not walked to
+        j = clamp(searchsortedlast(xs, energies_eV[1]), firstindex(xs), last_interval)
+
         @inbounds for i in 1:n_energies
-            # Interpolate scattering factors at this energy
-            f1_val = itp1(energies_eV[i])
-            f2_val = itp2(energies_eV[i])
+            x = energies_eV[i]
+            if shared_grid && x_lo <= x <= x_hi
+                if x < xs[j]  # out-of-order input: re-locate instead of walking backwards
+                    j = clamp(searchsortedlast(xs, x), firstindex(xs), last_interval)
+                end
+                # Walk a few nodes; a larger jump (sparse energies) falls back to binary search, which
+                # selects the same interval, so the walk never costs O(grid) per point
+                steps = 0
+                while j < last_interval && x >= xs[j + 1]
+                    j += 1
+                    steps += 1
+                    if steps == 8
+                        j = clamp(searchsortedlast(xs, x), firstindex(xs), last_interval)
+                        break
+                    end
+                end
+                f1_val, f2_val = _hermite_pair(itp1, itp2, x, j)
+            else
+                # Outside the tabulated range (or distinct grids): defer to the interpolators
+                f1_val = itp1(x)
+                f2_val = itp2(x)
+            end
 
             # Calculate wavelength-dependent factors
             wave_sq = wavelengths_m[i]^2
@@ -1003,5 +1062,12 @@ function SubRefrac(formulaStr::String, energies_keV::Vector{Float64}, massDensit
     )
     return _calculate_single_material_impl(formulaStr, energies_keV, massDensity)
 end
+
+# Cache compiled specializations of the public entry points in the package image, cutting
+# first-call latency. Plain `precompile` (no workload) so no cache state is serialized.
+precompile(calculate_single_material_properties, (String, Vector{Float64}, Float64))
+precompile(calculate_xray_properties, (Vector{String}, Vector{Float64}, Vector{Float64}))
+precompile(Refrac, (Vector{String}, Vector{Float64}, Vector{Float64}))
+precompile(SubRefrac, (String, Vector{Float64}, Float64))
 
 end  # module
