@@ -988,7 +988,11 @@ Calculate X-ray optical properties for multiple chemical formulas (vector interf
 - `massDensityList::Vector{Float64}`: Mass densities in g/cm³
 
 # Returns
-- `Vector{XRayResult}`: Results in same order as input formulas
+- `Vector{XRayResult}`: Results in same order as input formulas, each with `energy` sorted ascending
+
+# Throws
+- `ArgumentError`: empty or mismatched inputs, energies outside 0.03 - 30 KeV, non-positive or
+  non-finite densities, or invalid formulas (all invalid formulas are reported together)
 
 # Examples
 ```julia
@@ -1016,11 +1020,15 @@ Calculate X-ray optical properties for a single chemical formula.
 
 # Arguments
 - `formulaStr::String`: Chemical formula (e.g., "SiO2", "Al2O3")
-- `energy::Vector{Float64}`: X-ray energies in KeV
+- `energy::Vector{Float64}`: X-ray energies in KeV (0.03 - 30 KeV)
 - `massDensity::Float64`: Mass density in g/cm³
 
 # Returns
-- `XRayResult`: Complete set of calculated optical properties
+- `XRayResult`: Complete set of calculated optical properties, with `energy` sorted ascending
+
+# Throws
+- `ArgumentError`: empty energy vector, energies outside 0.03 - 30 KeV, a non-positive or
+  non-finite density, or an invalid formula
 
 # Examples
 ```julia

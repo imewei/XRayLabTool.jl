@@ -22,6 +22,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adheri
 - `precompile` statements for the public entry points cut the first batch call from ~30-50 ms to ~1 ms
 - `accumulate_optical_coefficients!` returns immediately for empty input
 
+### Docs
+- README, Getting Started and the public docstrings now document the input constraints (finite positive element counts, 64-level nesting limit, finite energies), the `ArgumentError` cases, and that `result.energy` is sorted ascending; f₁/f₂ and electron counts are described per formula unit
+- Migration guide no longer claims the cache has lock-free reads
+
 ### Tests
 - Added a closed-form δ/β check (rtol 1e-9); the previous absolute tolerance (1e-6) let a 4% error in the optical coefficients pass
 

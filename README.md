@@ -12,11 +12,11 @@ XRayLabTool is a Julia package that calculates X-ray optical properties of mater
 - PCHIP interpolation for smooth, monotonicity-preserving evaluation at arbitrary energies
 - Parenthesized chemical formula support: `Ca(OH)2`, `Ca3(PO4)2`, `Fe(OH)2`, `Fe(OH)3`
 - Debug logging with topic categories (enable with `ENV["JULIA_DEBUG"] = "XRayLabTool"`)
-- Lightweight: only 3 runtime dependencies (PCHIPInterpolation, Mendeleev, Unitful)
+- Lightweight: only 3 third-party dependencies (PCHIPInterpolation, Mendeleev, Unitful) plus the `Logging` standard library
 
 ## Requirements
 
-- Julia 1.10 or later
+- Julia 1.10 or later (CI runs on Julia 1.10, the latest release, and the upcoming prerelease)
 
 ## Installation
 
@@ -61,7 +61,9 @@ au   = results[3]   # Au
 |-----------|------|-------------|
 | `formula` | `String` or `Vector{String}` | Case-sensitive chemical formula(s). `"CO"` = Carbon Monoxide, `"Co"` = Cobalt |
 | `energy` | `Vector{Float64}` | X-ray energies in keV (range: 0.03 -- 30.0) |
-| `density` | `Float64` or `Vector{Float64}` | Mass density in g/cm3 (one per formula in batch mode) |
+| `density` | `Float64` or `Vector{Float64}` | Positive, finite mass density in g/cm3 (one per formula in batch mode) |
+
+Invalid input raises `ArgumentError`: energies outside 0.03 -- 30 keV or non-finite, non-positive densities, unknown elements, and formulas with zero, non-finite or unrepresentable element counts or more than 64 levels of nested parentheses. Results are returned with `energy` sorted in ascending order.
 
 ## Output: `XRayResult`
 
@@ -69,15 +71,15 @@ au   = results[3]   # Au
 |-------|------|-------------|
 | `formula` | `String` | Chemical formula |
 | `molecular_weight` | `Float64` | Molecular weight (g/mol) |
-| `number_of_electrons` | `Float64` | Electrons per molecule |
+| `number_of_electrons` | `Float64` | Electrons per formula unit |
 | `mass_density` | `Float64` | Mass density (g/cm3) |
 | `electron_density` | `Float64` | Electron density (1/A3) |
 | `energy` | `Vector{Float64}` | X-ray energy (keV) |
 | `wavelength` | `Vector{Float64}` | Wavelength (A) |
 | `dispersion` | `Vector{Float64}` | Dispersion coefficient delta |
 | `absorption` | `Vector{Float64}` | Absorption coefficient beta |
-| `f1` | `Vector{Float64}` | Real atomic scattering factor |
-| `f2` | `Vector{Float64}` | Imaginary atomic scattering factor |
+| `f1` | `Vector{Float64}` | Real scattering factor, summed over the formula unit |
+| `f2` | `Vector{Float64}` | Imaginary scattering factor, summed over the formula unit |
 | `critical_angle` | `Vector{Float64}` | Critical angle (degrees) |
 | `attenuation_length` | `Vector{Float64}` | Attenuation length (cm) |
 | `real_sld` | `Vector{Float64}` | Real part of SLD (1/A2) |
