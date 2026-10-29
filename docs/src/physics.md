@@ -74,10 +74,10 @@ SLD is energy-independent to first order (the ``\lambda^2`` in δ and β cancels
 ### Electron density
 
 ```math
-\rho_e = \frac{\rho N_A Z_{mol}}{M}
+\rho_e = \frac{\rho N_A Z_{mol}}{M} \times 10^{-24}
 ```
 
-where ``Z_{mol}`` is the total number of electrons per formula unit.
+where ``Z_{mol}`` is the total number of electrons per formula unit. With ``\rho`` in g/cm³ and ``M`` in g/mol, the factor ``10^{-24}`` (cm³ → Å³) gives ``\rho_e`` in electrons/Å³.
 
 ## Physical constants
 

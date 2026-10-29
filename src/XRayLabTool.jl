@@ -44,8 +44,8 @@ The functions return XRayResult struct(s) containing:
 7. X-ray wavelength in Å (`wavelength`)
 8. Dispersion coefficient (`dispersion`)
 9. Absorption coefficient (`absorption`)
-10. Real part of atomic scattering factor (`f1`)
-11. Imaginary part of atomic scattering factor (`f2`)
+10. Real part of the scattering factor, summed over the formula unit (`f1`)
+11. Imaginary part of the scattering factor, summed over the formula unit (`f2`)
 12. Critical angle in degrees (`critical_angle`)
 13. Attenuation length in cm (`attenuation_length`)
 14. Real part of scattering length density in Å⁻² (`real_sld`)
@@ -69,6 +69,10 @@ const PCHIPInterp = Interpolator{Vector{Float64}, Vector{Float64}, Vector{Float6
 # Concrete element data tuple: (count, f1_interpolator, f2_interpolator)
 const ElementInterpolatorData = Tuple{Float64, PCHIPInterp, PCHIPInterp}
 
+# Deepest parenthesis nesting accepted by the formula parser; real formulas nest a few levels.
+# Bounds the recursion so a hostile string raises ArgumentError instead of overflowing the stack.
+const MAX_FORMULA_NESTING = 64
+
 # =====================================================================================
 # DATA STRUCTURES
 # =====================================================================================
@@ -91,8 +95,8 @@ struct XRayResult
     wavelength::Vector{Float64}          # X-ray wavelength (Å)
     dispersion::Vector{Float64}          # Dispersion coefficient
     absorption::Vector{Float64}          # Absorption coefficient
-    f1::Vector{Float64}                  # Real part of atomic scattering factor
-    f2::Vector{Float64}                  # Imaginary part of atomic scattering factor
+    f1::Vector{Float64}                  # Real part of scattering factor (formula-unit sum)
+    f2::Vector{Float64}                  # Imaginary part of scattering factor (formula-unit sum)
     critical_angle::Vector{Float64}      # Critical angle (degrees)
     attenuation_length::Vector{Float64}  # Attenuation length (cm)
     real_sld::Vector{Float64}            # Real part of SLD (Å⁻²)
@@ -200,16 +204,37 @@ end
     end
 end
 
+"""Validate that the molecular weight implied by the element counts is usable.
+
+Counts that are subnormal or huge push the molecular weight (or the density prefactor
+derived from it) out of the representable range and would otherwise yield Inf results.
+"""
+@inline function _validate_molecular_weight(molecular_weight::Float64, formula::String)
+    if !(
+        isfinite(molecular_weight) &&
+        molecular_weight > 0 &&
+        isfinite(SCATTERING_PREFACTOR / molecular_weight)
+    )
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: element counts in \"$formula\" give a molecular weight ($molecular_weight g/mol) outside the representable range",
+            ),
+        )
+    end
+end
+
 """Validate all formulas upfront. Throws ArgumentError listing all invalid formulas."""
 function _validate_formulas(formulaList::Vector{String})
     invalid = String[]
     for formula in formulaList
         try
-            symbols, _ = parse_formula(formula)
-            for sym in symbols
-                atomic_number_and_mass(sym)
+            symbols, counts = parse_formula(formula)
+            molecular_weight = 0.0
+            for (sym, count) in zip(symbols, counts)
+                molecular_weight += count * atomic_number_and_mass(sym)[2]
                 load_element_interpolators(sym)
             end
+            _validate_molecular_weight(molecular_weight, formula)
         catch e
             # Only expected failures mean "invalid formula"; surface real internal errors
             e isa ArgumentError || rethrow()
@@ -308,7 +333,7 @@ symbols, counts = parse_formula("Ca3(PO4)2")
 ```
 
 # Throws
-- 'ArgumentError': If formula string is invalid or empty
+- 'ArgumentError': If the formula string is invalid or empty, an element count is not positive and finite, or parentheses are nested deeper than `MAX_FORMULA_NESTING`
 """
 function parse_formula(formulaStr::String)
     @debug "Parsing formula" _group = :parser input = formulaStr
@@ -353,7 +378,14 @@ end
 Recursive descent parser for chemical formula groups. Handles nested parentheses.
 Returns (element_symbols, element_counts, next_position).
 """
-function _parse_group(s::String, pos::Int)
+function _parse_group(s::String, pos::Int, depth::Int = 0)
+    if depth > MAX_FORMULA_NESTING
+        throw(
+            ArgumentError(
+                "Invalid chemical formula: parentheses nested deeper than $MAX_FORMULA_NESTING levels",
+            ),
+        )
+    end
     elements = String[]
     counts = Float64[]
     sizehint!(elements, 4)
@@ -364,7 +396,7 @@ function _parse_group(s::String, pos::Int)
 
         if c == '('
             # Recurse into sub-group
-            sub_elems, sub_counts, pos = _parse_group(s, pos + 1)
+            sub_elems, sub_counts, pos = _parse_group(s, pos + 1, depth + 1)
 
             if pos > lastindex(s) || s[pos] != ')'
                 throw(
@@ -565,13 +597,13 @@ scattering factors for a material based on its elemental composition.
 
 # Mathematical Background
 The optical coefficients delta and beta are calculated using:
-- δ = (λ²/2π) × rₑ × ρ × Nₐ × (Σᵢ nᵢ × f1ᵢ) / M
-- β = (λ²/2π) × rₑ × ρ × Nₐ × (Σᵢ nᵢ × f2ᵢ) / M
+- δ = (λ²/2π) × rₑ × (10⁶·ρ) × Nₐ × (Σᵢ nᵢ × f1ᵢ) / M
+- β = (λ²/2π) × rₑ × (10⁶·ρ) × Nₐ × (Σᵢ nᵢ × f2ᵢ) / M
 
 Where:
 - λ: X-ray wavelength in meters
 - rₑ: Thomson scattering length
-- ρ: Mass density
+- ρ: Mass density in g/cm³ (the factor 10⁶ converts to g/m³ for λ in metres)
 - Nₐ: Avogadro's number
 - nᵢ: Number of atoms of element i
 - f1ᵢ, f2ᵢ: Atomic scattering factors for element i
@@ -820,6 +852,8 @@ function _calculate_single_material_impl(
         molecular_weight += element_counts[i] * atomic_mass
         number_of_electrons += atomic_number * element_counts[i]
     end
+
+    _validate_molecular_weight(molecular_weight, formulaStr)
 
     @debug "Molecular properties computed" _group = :computation formula = formulaStr MW =
         round(molecular_weight; digits = 3) electrons = number_of_electrons element_count =
