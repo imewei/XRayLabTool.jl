@@ -12,7 +12,7 @@ Given a chemical formula (e.g., `"SiO2"`), an energy range (0.03–30 keV), and 
 |----------|--------|-------|
 | Dispersion coefficient | δ | dimensionless |
 | Absorption coefficient | β | dimensionless |
-| Atomic scattering factors | f₁, f₂ | electrons/atom |
+| Scattering factors (summed over the formula unit) | f₁, f₂ | electrons/formula unit |
 | Critical angle | θc | degrees |
 | Attenuation length | L | cm |
 | Scattering length density | SLD | Å⁻² |
@@ -38,8 +38,8 @@ results = calculate_xray_properties(
     [2.2, 3.95, 19.3],
 )
 
-sio2 = results["SiO2"]
-au   = results["Au"]
+sio2 = results[1]  # same order as the input formulas
+au   = results[3]
 ```
 
 ## Data source

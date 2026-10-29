@@ -13,6 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adheri
 - `@debug` output for derived quantities now shows values instead of `#NN (generic function ...)`
 - Formula counts that overflow to `Inf` (e.g. 200-digit counts) now raise `ArgumentError` instead of returning NaN properties
 - `result.<field>` access is type-stable again (the legacy-name lookup no longer sits on the hot path); legacy names such as `result.Energy` still work
+- Docs: δ/β equations now show the 10⁶ g/cm³→g/m³ factor, the constants table matches the code, f₁/f₂ units are per formula unit, the quick-start no longer indexes batch results by formula string, and `ų` typos are corrected to `Å³`
 
 ### Tests
 - Added a closed-form δ/β check (rtol 1e-9); the previous absolute tolerance (1e-6) let a 4% error in the optical coefficients pass

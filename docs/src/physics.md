@@ -17,17 +17,17 @@ where δ (dispersion) and β (absorption) are both small positive numbers (typic
 The dispersion and absorption coefficients are calculated from:
 
 ```math
-\delta = \frac{\lambda^2}{2\pi} r_e \frac{\rho N_A}{M} \sum_i n_i f_{1,i}(E)
+\delta = \frac{\lambda^2}{2\pi} r_e \frac{10^{6}\,\rho N_A}{M} \sum_i n_i f_{1,i}(E)
 ```
 
 ```math
-\beta = \frac{\lambda^2}{2\pi} r_e \frac{\rho N_A}{M} \sum_i n_i f_{2,i}(E)
+\beta = \frac{\lambda^2}{2\pi} r_e \frac{10^{6}\,\rho N_A}{M} \sum_i n_i f_{2,i}(E)
 ```
 
 where:
 - ``\lambda`` — X-ray wavelength (m)
 - ``r_e = 2.818 \times 10^{-15}`` m — classical electron radius (Thomson scattering length)
-- ``\rho`` — mass density (g/cm³)
+- ``\rho`` — mass density (g/cm³); the factor ``10^6`` converts it to g/m³ so that ``\lambda`` in metres gives a dimensionless result
 - ``N_A`` — Avogadro's number
 - ``M`` — molecular weight (g/mol)
 - ``n_i`` — number of atoms of element ``i`` per formula unit
@@ -81,15 +81,15 @@ where ``Z_{mol}`` is the total number of electrons per formula unit.
 
 ## Physical constants
 
-The package uses the following constants (CODATA values):
+The package uses the following constants (as defined in `src/XRayLabTool.jl`):
 
 | Constant | Symbol | Value |
 |----------|--------|-------|
-| Thomson scattering length | ``r_e`` | 2.8179403227 × 10⁻¹⁵ m |
+| Thomson scattering length | ``r_e`` | 2.8179403205 × 10⁻¹⁵ m |
 | Speed of light | ``c`` | 299792458 m/s |
-| Planck constant | ``h`` | 6.626068 × 10⁻³⁴ J·s |
-| Elementary charge | ``e`` | 1.60217646 × 10⁻¹⁹ C |
-| Avogadro's number | ``N_A`` | 6.02214199 × 10²³ mol⁻¹ |
+| Planck constant | ``h`` | 6.62607015 × 10⁻³⁴ J·s (exact) |
+| Elementary charge | ``e`` | 1.602176634 × 10⁻¹⁹ C (exact) |
+| Avogadro's number | ``N_A`` | 6.02214076 × 10²³ mol⁻¹ (exact) |
 
 ## References
 
