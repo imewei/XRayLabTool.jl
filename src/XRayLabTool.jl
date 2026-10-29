@@ -73,6 +73,10 @@ const ElementInterpolatorData = Tuple{Float64, PCHIPInterp, PCHIPInterp}
 # Bounds the recursion so a hostile string raises ArgumentError instead of overflowing the stack.
 const MAX_FORMULA_NESTING = 64
 
+# Tabulated range of the bundled scattering-factor data
+const MIN_ENERGY_KEV = 0.03
+const MAX_ENERGY_KEV = 30.0
+
 # =====================================================================================
 # DATA STRUCTURES
 # =====================================================================================
@@ -189,7 +193,7 @@ const INTERPOLATOR_LOCK = ReentrantLock()
     if isempty(energies_keV)
         throw(ArgumentError("Energy vector must not be empty"))
     end
-    if any(e -> !isfinite(e) || e < 0.03 || e > 30.0, energies_keV)
+    if any(e -> !isfinite(e) || e < MIN_ENERGY_KEV || e > MAX_ENERGY_KEV, energies_keV)
         throw(ArgumentError("Energy is out of range 0.03KeV ~ 30KeV (NaN/Inf not allowed)"))
     end
     @debug "Energy range validated" _group = :validation count = length(energies_keV) min_keV =
@@ -229,11 +233,8 @@ function _validate_formulas(formulaList::Vector{String})
     for formula in formulaList
         try
             symbols, counts = parse_formula(formula)
-            molecular_weight = 0.0
-            for (sym, count) in zip(symbols, counts)
-                molecular_weight += count * atomic_number_and_mass(sym)[2]
-                load_element_interpolators(sym)
-            end
+            molecular_weight, _ = _molecular_weight_and_electrons(symbols, counts)
+            foreach(load_element_interpolators, symbols)
             _validate_molecular_weight(molecular_weight, formula)
         catch e
             # Only expected failures mean "invalid formula"; surface real internal errors
@@ -303,6 +304,22 @@ function atomic_number_and_mass(element_symbol::String)
         atomic_number mass = atomic_mass
 
     return result
+end
+
+"""
+    _molecular_weight_and_electrons(symbols, counts) -> (Float64, Float64)
+
+Molecular weight (g/mol) and electrons per formula unit for parsed element symbols and counts.
+"""
+function _molecular_weight_and_electrons(symbols::Vector{String}, counts::Vector{Float64})
+    molecular_weight = 0.0
+    number_of_electrons = 0.0
+    for (sym, count) in zip(symbols, counts)
+        atomic_number, atomic_mass = atomic_number_and_mass(sym)
+        molecular_weight += count * atomic_mass
+        number_of_electrons += atomic_number * count
+    end
+    return molecular_weight, number_of_electrons
 end
 
 """
@@ -853,21 +870,8 @@ function _calculate_single_material_impl(
     n_elements = length(element_symbols)
     n_energies = length(energies_keV)
 
-    # Pre-allocate arrays for efficiency
-    molecular_weight = 0.0
-    number_of_electrons = 0.0
-    atomic_data = Vector{Tuple{Int, Float64}}(undef, n_elements)
-
-    # Look up atomic data for each element in the formula
-    for i in 1:n_elements
-        atomic_number, atomic_mass = atomic_number_and_mass(element_symbols[i])
-        atomic_data[i] = (atomic_number, atomic_mass)
-
-        # Accumulate molecular weight and total electrons
-        molecular_weight += element_counts[i] * atomic_mass
-        number_of_electrons += atomic_number * element_counts[i]
-    end
-
+    molecular_weight, number_of_electrons =
+        _molecular_weight_and_electrons(element_symbols, element_counts)
     _validate_molecular_weight(molecular_weight, formulaStr)
 
     @debug "Molecular properties computed" _group = :computation formula = formulaStr MW =
@@ -1075,18 +1079,11 @@ function clear_caches!()
 end
 
 # =====================================================================================
-# DEPRECATED ALIASES
+# DEPRECATED PUBLIC API
 # =====================================================================================
-
-# Deprecated aliases for backward compatibility
-# These will issue deprecation warnings when used
 
 # Removed in v0.7: get_atomic_data, load_f1f2_table, calculate_scattering_factors!
 # Removed in v0.6: load_scattering_factor_table, create_interpolators, pchip_interpolators
-
-# =====================================================================================
-# DEPRECATED PUBLIC API
-# =====================================================================================
 
 """
     Refrac(formulaList, energy, massDensityList) -> Vector{XRayResult}
