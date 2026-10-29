@@ -194,7 +194,11 @@ const INTERPOLATOR_LOCK = ReentrantLock()
         throw(ArgumentError("Energy vector must not be empty"))
     end
     if any(e -> !isfinite(e) || e < MIN_ENERGY_KEV || e > MAX_ENERGY_KEV, energies_keV)
-        throw(ArgumentError("Energy is out of range 0.03KeV ~ 30KeV (NaN/Inf not allowed)"))
+        throw(
+            ArgumentError(
+                "Energy is out of range $(MIN_ENERGY_KEV)KeV ~ $(MAX_ENERGY_KEV)KeV (NaN/Inf not allowed)",
+            ),
+        )
     end
     @debug "Energy range validated" _group = :validation count = length(energies_keV) min_keV =
         minimum(energies_keV) max_keV = maximum(energies_keV)
